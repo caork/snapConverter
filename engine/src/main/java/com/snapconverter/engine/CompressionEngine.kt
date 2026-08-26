@@ -28,7 +28,7 @@ class CompressionEngine(
     private val probe = DeviceCapabilityProbe()
     private val video = VideoEngine(appContext, selector)
     private val image = ImageEngine(appContext, selector)
-    private val quality = QualityAnalyzer(appContext)
+    private val quality = QualityAnalyzer(appContext, selector)
 
     fun probeDevice(): DeviceCapabilityReport = probe.probe()
 

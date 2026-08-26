@@ -35,6 +35,9 @@ class VideoEngine(
             var durationUs = 0L
             var audioMime: String? = null
             var audioBitrate = 0
+            var colorStandard: Int? = null
+            var colorRange: Int? = null
+            var colorTransfer: Int? = null
             for (i in 0 until extractor.trackCount) {
                 val format = extractor.getTrackFormat(i)
                 val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
@@ -57,6 +60,9 @@ class VideoEngine(
                     if (format.containsKey(MediaFormat.KEY_DURATION)) {
                         durationUs = format.getLong(MediaFormat.KEY_DURATION)
                     }
+                    colorStandard = formatIntOrNull(format, MediaFormat.KEY_COLOR_STANDARD)
+                    colorRange = formatIntOrNull(format, MediaFormat.KEY_COLOR_RANGE)
+                    colorTransfer = formatIntOrNull(format, MediaFormat.KEY_COLOR_TRANSFER)
                 } else if (mime.startsWith("audio/")) {
                     audioMime = mime
                     if (format.containsKey(MediaFormat.KEY_BIT_RATE)) {
@@ -111,6 +117,9 @@ class VideoEngine(
                 displayName = identity.displayName,
                 fileSizeBytes = identity.fileSizeBytes,
                 captureTimeMs = identity.captureTimeMs,
+                colorStandard = colorStandard,
+                colorRange = colorRange,
+                colorTransfer = colorTransfer,
             )
         } finally {
             extractor.release()
@@ -133,6 +142,11 @@ class VideoEngine(
     private fun formatInt(format: MediaFormat, key: String): Int {
         if (!format.containsKey(key)) return 0
         return runCatching { format.getInteger(key) }.getOrDefault(0)
+    }
+
+    private fun formatIntOrNull(format: MediaFormat, key: String): Int? {
+        if (!format.containsKey(key)) return null
+        return runCatching { format.getInteger(key) }.getOrNull()
     }
 
     fun compress(

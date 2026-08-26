@@ -44,6 +44,9 @@ data class VideoSourceInfo(
     val displayName: String = "",
     val fileSizeBytes: Long = 0,
     val captureTimeMs: Long? = null,
+    val colorStandard: Int? = null,
+    val colorRange: Int? = null,
+    val colorTransfer: Int? = null,
 ) {
     val displayWidth: Int get() = VideoGeometry.displayWidth(width, height, rotation)
     val displayHeight: Int get() = VideoGeometry.displayHeight(width, height, rotation)
@@ -104,6 +107,9 @@ data class VideoEncodePlan(
     val qpPMax: Int? = null,
     val qpBMin: Int? = null,
     val qpBMax: Int? = null,
+    val colorStandard: Int? = null,
+    val colorRange: Int? = null,
+    val colorTransfer: Int? = null,
 )
 
 data class ImageEncodePlan(

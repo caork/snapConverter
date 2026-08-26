@@ -2,6 +2,7 @@ package com.snapconverter.engine.policy
 
 import android.media.MediaCodecInfo.CodecProfileLevel
 import android.media.MediaCodecInfo.EncoderCapabilities
+import android.media.MediaFormat
 import com.snapconverter.engine.codec.CodecCandidate
 import com.snapconverter.engine.codec.MimeTypes
 import com.snapconverter.engine.codec.VendorFamily
@@ -121,6 +122,18 @@ class CompressionPolicyTest {
         )
         assertNull(plan.profile)
         assertEquals(2, plan.maxBFrames)
+    }
+
+    @Test
+    fun hdEncodeIsTaggedBt709Limited() {
+        val plan = policy.planVideo(
+            source,
+            request(),
+            encoder(modes = setOf(EncoderCapabilities.BITRATE_MODE_VBR)),
+        )
+        assertEquals(MediaFormat.COLOR_STANDARD_BT709, plan.colorStandard)
+        assertEquals(MediaFormat.COLOR_RANGE_LIMITED, plan.colorRange)
+        assertEquals(MediaFormat.COLOR_TRANSFER_SDR_VIDEO, plan.colorTransfer)
     }
 
     @Test

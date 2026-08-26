@@ -7,15 +7,21 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import com.snapconverter.engine.ScLog
+import com.snapconverter.engine.codec.HardwareCodecSelector
 import com.snapconverter.engine.policy.MediaKind
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
  * Full-reference PSNR-Y / SSIM after encode. Samples frames; not the hot encode path.
  */
-class QualityAnalyzer(context: Context) {
+class QualityAnalyzer(
+    context: Context,
+    selector: HardwareCodecSelector = HardwareCodecSelector(),
+) {
     private val appContext = context.applicationContext
+    private val sampler = VideoFrameSampler(appContext, selector)
 
     fun compare(
         kind: MediaKind,
@@ -56,14 +62,75 @@ class QualityAnalyzer(context: Context) {
         val duration = durationUs.coerceAtLeast(1L)
         val (cw, ch) = compareSize(outW, outH)
         val n = sampleCount(duration)
+        val times = LongArray(n) { i ->
+            if (n == 1) duration / 2 else duration * i / (n - 1)
+        }
+        val decoded = scoreDecoded(original, encoded, times, cw, ch)
+        if (decoded != null) return decoded
+        ScLog.w("quality decoder sample empty, using retriever OPTION_CLOSEST")
+        return scoreRetriever(original, encoded, times, cw, ch)
+    }
+
+    private fun scoreDecoded(
+        original: Uri,
+        encoded: Uri,
+        times: LongArray,
+        width: Int,
+        height: Int,
+    ): QualityReport? {
+        val refs = sampler.sample(original, times, width, height)
+        val dists = sampler.sample(encoded, times, width, height)
+        if (refs.isEmpty() || dists.isEmpty()) return null
+        var psnrSum = 0.0
+        var ssimSum = 0.0
+        var counted = 0
+        val refI420 = ArrayList<ByteArray>(refs.size)
+        val distI420 = ArrayList<ByteArray>(refs.size)
+        var w = 0
+        var h = 0
+        for (a in refs) {
+            val b = dists.minByOrNull { abs(it.ptsUs - a.ptsUs) } ?: continue
+            if (a.width != b.width || a.height != b.height) continue
+            if (abs(a.ptsUs - b.ptsUs) > 100_000L) continue
+            psnrSum += ImageMetrics.psnrY(a.yFull, b.yFull)
+            ssimSum += ImageMetrics.ssimY(a.yFull, b.yFull, a.width, a.height)
+            refI420 += a.i420Limited
+            distI420 += b.i420Limited
+            w = a.width
+            h = a.height
+            counted++
+        }
+        if (counted == 0) return null
+        ScLog.i("quality decoded samples=$counted drift-filtered ${w}x$h")
+        val vmaf = if (refI420.isNotEmpty() && VmafNative.available) {
+            VmafNative.scoreI420(w, h, refI420.toTypedArray(), distI420.toTypedArray())
+        } else {
+            null
+        }
+        return QualityReport(
+            psnrY = psnrSum / counted,
+            ssim = ssimSum / counted,
+            vmaf = vmaf,
+            samples = counted,
+            compareWidth = w,
+            compareHeight = h,
+        )
+    }
+
+    private fun scoreRetriever(
+        original: Uri,
+        encoded: Uri,
+        times: LongArray,
+        cw: Int,
+        ch: Int,
+    ): QualityReport? {
         val orig = MediaMetadataRetriever()
         val dist = MediaMetadataRetriever()
         val pairs = mutableListOf<Pair<Bitmap, Bitmap>>()
         try {
             orig.setDataSource(appContext, original)
             dist.setDataSource(appContext, encoded)
-            for (i in 0 until n) {
-                val t = if (n == 1) duration / 2 else duration * i / (n - 1)
+            for (t in times) {
                 val a = frameAt(orig, t, cw, ch) ?: continue
                 val b = frameAt(dist, t, cw, ch)
                 if (b == null) {
@@ -131,12 +198,12 @@ class QualityAnalyzer(context: Context) {
             if (Build.VERSION.SDK_INT >= 27) {
                 retriever.getScaledFrameAtTime(
                     timeUs,
-                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                    MediaMetadataRetriever.OPTION_CLOSEST,
                     w,
                     h,
                 )
             } else {
-                retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
             }
         }.getOrNull()?.let { raw ->
             if (raw.width == w && raw.height == h) raw

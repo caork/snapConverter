@@ -622,6 +622,16 @@ private fun ResultCard(state: UiState, onReset: () -> Unit) {
                 if (state.fileSizeBytes > 0) {
                     append(" · 原 ${formatSize(state.fileSizeBytes)}")
                 }
+                val v = state.videoInfo
+                if (v != null && v.bitrateBps > 0) {
+                    val codec = when {
+                        v.mime.contains("hevc", ignoreCase = true) -> "HEVC"
+                        v.mime.contains("avc", ignoreCase = true) -> "H.264"
+                        v.mime.contains("av01", ignoreCase = true) -> "AV1"
+                        else -> v.mime.substringAfter('/')
+                    }
+                    append(" · 原片 $codec ${v.bitrateBps / 1000} kbps")
+                }
             },
             fontSize = 12.sp,
         )

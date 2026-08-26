@@ -54,8 +54,10 @@ object CaptureTimestamp {
                 }
             }
         }
-        if (capture == null) capture = readExifTimestamp(resolver, uri)
-        if (capture == null) capture = readRetrieverTimestamp(context, uri)
+        capture = EpochMs.plausible(capture)
+        if (capture == null) capture = EpochMs.plausible(readExifTimestamp(resolver, uri))
+        if (capture == null) capture = EpochMs.plausible(readRetrieverTimestamp(context, uri))
+        if (capture == null) capture = EpochMs.plausible(parseFilename(displayName))
         if (size <= 0) {
             runCatching {
                 resolver.openAssetFileDescriptor(uri, "r")?.use { size = it.length }
@@ -139,6 +141,22 @@ object CaptureTimestamp {
         }.getOrNull()
     }
 
+    fun parseFilename(name: String): Long? {
+        val m = FILENAME_TIME.find(name) ?: return null
+        val y = m.groupValues[1].toInt()
+        val mo = m.groupValues[2].toInt()
+        val d = m.groupValues[3].toInt()
+        val hh = m.groupValues[4].toInt()
+        val mm = m.groupValues[5].toInt()
+        val ss = m.groupValues[6].toInt()
+        return runCatching {
+            java.util.Calendar.getInstance().apply {
+                set(y, mo - 1, d, hh, mm, ss)
+                set(java.util.Calendar.MILLISECOND, 0)
+            }.timeInMillis
+        }.getOrNull()
+    }
+
     private fun readRetrieverTimestamp(context: Context, uri: Uri): Long? {
         val retriever = MediaMetadataRetriever()
         return try {
@@ -150,6 +168,8 @@ object CaptureTimestamp {
             retriever.release()
         }
     }
+
+    private val FILENAME_TIME = Regex("""(20\d{2})[_-]?(\d{2})[_-]?(\d{2})[_-](\d{2})(\d{2})(\d{2})""")
 
     private val DATE_TAGS = listOf(
         ExifInterface.TAG_DATETIME,

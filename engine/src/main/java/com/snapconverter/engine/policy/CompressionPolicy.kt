@@ -2,6 +2,7 @@ package com.snapconverter.engine.policy
 
 import android.media.MediaCodecInfo
 import android.media.MediaCodecInfo.EncoderCapabilities
+import android.media.MediaFormat
 import com.snapconverter.engine.codec.CodecCandidate
 import com.snapconverter.engine.codec.MimeTypes
 import kotlin.math.roundToInt
@@ -145,6 +146,11 @@ class CompressionPolicy {
             qpPMax = qpPMax,
             qpBMin = qpBMin,
             qpBMax = qpBMax,
+            colorStandard = source.colorStandard
+                ?: MediaFormat.COLOR_STANDARD_BT709,
+            colorRange = MediaFormat.COLOR_RANGE_LIMITED,
+            colorTransfer = source.colorTransfer
+                ?: MediaFormat.COLOR_TRANSFER_SDR_VIDEO,
         )
     }
 

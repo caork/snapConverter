@@ -239,6 +239,9 @@ class SurfaceTranscoder(
         plan.complexity?.let { format.setInteger(MediaFormat.KEY_COMPLEXITY, it) }
         plan.profile?.let { format.setInteger(MediaFormat.KEY_PROFILE, it) }
         plan.level?.let { format.setInteger(MediaFormat.KEY_LEVEL, it) }
+        plan.colorStandard?.let { format.setInteger(MediaFormat.KEY_COLOR_STANDARD, it) }
+        plan.colorRange?.let { format.setInteger(MediaFormat.KEY_COLOR_RANGE, it) }
+        plan.colorTransfer?.let { format.setInteger(MediaFormat.KEY_COLOR_TRANSFER, it) }
         if (Build.VERSION.SDK_INT >= 31) {
             plan.qpIMin?.let { format.setInteger(MediaFormat.KEY_VIDEO_QP_I_MIN, it) }
             plan.qpIMax?.let { format.setInteger(MediaFormat.KEY_VIDEO_QP_I_MAX, it) }
