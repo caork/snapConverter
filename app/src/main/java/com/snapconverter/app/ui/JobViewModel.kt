@@ -51,6 +51,7 @@ class JobViewModel(application: Application) : AndroidViewModel(application) {
     private val engine = (application as SnapConverterApp).engine
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state
+    @Volatile private var autostartWhenReady = false
 
     init {
         viewModelScope.launch(Dispatchers.Default) {
@@ -59,10 +60,13 @@ class JobViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
             _state.update { it.copy(capabilities = report) }
+            if (autostartWhenReady && _state.value.input != null && !_state.value.running) {
+                start()
+            }
         }
     }
 
-    fun onPicked(uri: Uri, kind: MediaKind) {
+    fun onPicked(uri: Uri, kind: MediaKind, autostart: Boolean = false) {
         runCatching {
             getApplication<Application>().contentResolver.takePersistableUriPermission(
                 uri,
@@ -93,6 +97,10 @@ class JobViewModel(application: Application) : AndroidViewModel(application) {
                         is ImageSourceInfo -> it.copy(imageInfo = info, videoInfo = null, message = null)
                         else -> it.copy(message = null)
                     }
+                }
+                if (autostart) {
+                    if (_state.value.capabilities != null) start()
+                    else autostartWhenReady = true
                 }
             }.onFailure { t ->
                 _state.update { it.copy(error = t.message ?: t.toString(), message = null) }

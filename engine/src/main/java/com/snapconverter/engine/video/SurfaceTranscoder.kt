@@ -46,6 +46,7 @@ class SurfaceTranscoder(
         var muxer: MediaMuxer? = null
         var gpu: GpuFrameProcessor? = null
         var encoderSurface: Surface? = null
+        var muxerStarted = false
         try {
             extractor.setDataSource(context, input, null)
             val videoTrack = selectTrack(extractor, "video/")
@@ -81,7 +82,6 @@ class SurfaceTranscoder(
             val durationUs = source.durationUs.coerceAtLeast(1L)
             val minFrameIntervalUs = 1_000_000L / plan.frameRate
             var lastEncodedPts = -minFrameIntervalUs
-            var muxerStarted = false
             var videoTrackIndex = -1
             var audioTrackIndex = -1
             var audioExtractor: MediaExtractor? = null
@@ -186,16 +186,21 @@ class SurfaceTranscoder(
             }
             audioExtractor?.release()
             progress?.onProgress(1f)
+            ScLog.i("transcode loop finished, releasing EGL then codecs")
         } finally {
+            // EGL must drop the encoder input Surface before MediaCodec.stop(),
+            // otherwise Qualcomm C2 can block the calling thread indefinitely.
+            runCatching { gpu?.release() }
+            gpu = null
             runCatching { decoderCodec?.stop() }
             runCatching { decoderCodec?.release() }
             runCatching { encoderCodec?.stop() }
             runCatching { encoderCodec?.release() }
-            runCatching { muxer?.stop() }
+            runCatching { if (muxerStarted) muxer?.stop() }
             runCatching { muxer?.release() }
-            runCatching { gpu?.release() }
             runCatching { encoderSurface?.release() }
             extractor.release()
+            ScLog.i("release complete")
         }
     }
 
