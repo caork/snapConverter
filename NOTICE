@@ -8,5 +8,8 @@ Qualcomm vendor parameter names (`vendor.qti-ext-*`) are documented public
 protocol keys from Qualcomm's MediaCodec vendor extensions. SnapConverter is
 not affiliated with Qualcomm Technologies, Inc.
 
+This product links Netflix libvmaf (BSD-2-Clause-Patent) for optional VMAF
+scoring after encode. See engine/src/main/cpp/vmaf/include and Netflix/vmaf.
+
 Snapdragon, Adreno, and Qualcomm are trademarks of Qualcomm Incorporated.
 Android is a trademark of Google LLC.

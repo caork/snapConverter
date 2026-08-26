@@ -592,12 +592,11 @@ private fun QualityBlock(state: UiState) {
             val q = state.qualityReport
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text("相对原片", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("PSNR-Y  ${"%.1f".format(q.psnrY)} dB  ${q.psnrLabel}", fontSize = 12.sp)
+                if (q.vmaf != null) {
+                    Text("VMAF    ${"%.1f".format(q.vmaf)}  ${q.vmafLabel}", fontSize = 12.sp)
                 }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("SSIM    ${"%.3f".format(q.ssim)}  ${q.ssimLabel}", fontSize = 12.sp)
-                }
+                Text("PSNR-Y  ${"%.1f".format(q.psnrY)} dB  ${q.psnrLabel}", fontSize = 12.sp)
+                Text("SSIM    ${"%.3f".format(q.ssim)}  ${q.ssimLabel}", fontSize = 12.sp)
                 Text(
                     "${q.samples} 帧 · ${q.compareWidth}×${q.compareHeight}",
                     fontSize = 11.sp,

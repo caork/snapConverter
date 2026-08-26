@@ -91,7 +91,11 @@ class QualityAnalyzer(context: Context) {
         val enc = FloatArray(width * height)
         val pixA = IntArray(width * height)
         val pixB = IntArray(width * height)
+        val refI420 = ArrayList<ByteArray>(pairs.size)
+        val distI420 = ArrayList<ByteArray>(pairs.size)
         var counted = 0
+        val evenW = width / 2 * 2
+        val evenH = height / 2 * 2
         for ((a, b) in pairs) {
             if (a.width != width || a.height != height || b.width != width || b.height != height) continue
             a.getPixels(pixA, 0, width, 0, 0, width, height)
@@ -100,12 +104,22 @@ class QualityAnalyzer(context: Context) {
             ImageMetrics.lumaBt601(pixB, enc)
             psnrSum += ImageMetrics.psnrY(ref, enc)
             ssimSum += ImageMetrics.ssimY(ref, enc, width, height)
+            if (evenW >= 16 && evenH >= 16 && VmafNative.available) {
+                refI420 += ArgbToI420.convert(pixA, evenW, evenH)
+                distI420 += ArgbToI420.convert(pixB, evenW, evenH)
+            }
             counted++
         }
         val n = counted.coerceAtLeast(1)
+        val vmaf = if (refI420.size >= 1) {
+            VmafNative.scoreI420(evenW, evenH, refI420.toTypedArray(), distI420.toTypedArray())
+        } else {
+            null
+        }
         return QualityReport(
             psnrY = psnrSum / n,
             ssim = ssimSum / n,
+            vmaf = vmaf,
             samples = counted,
             compareWidth = width,
             compareHeight = height,
@@ -181,6 +195,6 @@ class QualityAnalyzer(context: Context) {
     }
 
     companion object {
-        private const val MAX_COMPARE = 960
+        private const val MAX_COMPARE = 1920
     }
 }

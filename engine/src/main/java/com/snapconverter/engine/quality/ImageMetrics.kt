@@ -117,4 +117,12 @@ object ImageMetrics {
         ssim >= 0.80 -> "一般"
         else -> "较差"
     }
+
+    fun vmafLabel(vmaf: Double): String = when {
+        vmaf >= 95 -> "几乎无损"
+        vmaf >= 80 -> "优秀"
+        vmaf >= 60 -> "良好"
+        vmaf >= 40 -> "一般"
+        else -> "较差"
+    }
 }
