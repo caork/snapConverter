@@ -225,6 +225,7 @@ class SurfaceTranscoder(
         val format = MediaFormat.createVideoFormat(plan.mime, plan.width, plan.height)
         format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
         format.setInteger(MediaFormat.KEY_BIT_RATE, plan.bitrateBps)
+        plan.maxBitrateBps?.let { format.setInteger("max-bitrate", it) }
         format.setInteger(MediaFormat.KEY_FRAME_RATE, plan.frameRate)
         format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, plan.iFrameIntervalSec)
         format.setInteger(MediaFormat.KEY_BITRATE_MODE, plan.bitrateMode)
@@ -237,11 +238,14 @@ class SurfaceTranscoder(
         }
         plan.complexity?.let { format.setInteger(MediaFormat.KEY_COMPLEXITY, it) }
         plan.profile?.let { format.setInteger(MediaFormat.KEY_PROFILE, it) }
+        plan.level?.let { format.setInteger(MediaFormat.KEY_LEVEL, it) }
         if (Build.VERSION.SDK_INT >= 31) {
             plan.qpIMin?.let { format.setInteger(MediaFormat.KEY_VIDEO_QP_I_MIN, it) }
             plan.qpIMax?.let { format.setInteger(MediaFormat.KEY_VIDEO_QP_I_MAX, it) }
             plan.qpPMin?.let { format.setInteger(MediaFormat.KEY_VIDEO_QP_P_MIN, it) }
             plan.qpPMax?.let { format.setInteger(MediaFormat.KEY_VIDEO_QP_P_MAX, it) }
+            plan.qpBMin?.let { format.setInteger(MediaFormat.KEY_VIDEO_QP_B_MIN, it) }
+            plan.qpBMax?.let { format.setInteger(MediaFormat.KEY_VIDEO_QP_B_MAX, it) }
         }
         return format
     }

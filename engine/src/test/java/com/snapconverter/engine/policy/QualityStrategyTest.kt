@@ -27,4 +27,14 @@ class QualityStrategyTest {
         assertEquals(0, QualityStrategy.mapToCodecQuality(0, 0..100))
         assertEquals(51, QualityStrategy.mapToCodecQuality(100, 1..51))
     }
+
+    @Test
+    fun higherQualityMapsToLowerQp() {
+        val low = QualityStrategy.qpWindowForQuality(0)
+        val high = QualityStrategy.qpWindowForQuality(100)
+        assertTrue(high.pMax < low.pMax)
+        assertTrue(high.iMax <= high.pMax)
+        assertEquals(18, high.pMax)
+        assertEquals(48, low.pMax)
+    }
 }

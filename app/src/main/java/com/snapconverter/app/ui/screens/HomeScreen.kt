@@ -63,9 +63,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.snapconverter.app.R
+import android.media.MediaCodecInfo.EncoderCapabilities
 import com.snapconverter.app.ui.ConvertStage
 import com.snapconverter.app.ui.JobViewModel
 import com.snapconverter.app.ui.UiState
+import com.snapconverter.engine.codec.CodecCandidate
+import com.snapconverter.engine.codec.MimeTypes
 import com.snapconverter.engine.policy.BitrateModeOption
 import com.snapconverter.engine.policy.ComplexityOption
 import com.snapconverter.engine.policy.CompressionMode
@@ -316,21 +319,23 @@ private fun SettingsPanel(state: UiState, vm: JobViewModel) {
             }
         }
 
-        when (state.mode) {
-            CompressionMode.QUALITY, CompressionMode.LOSSLESS_REMUX -> {
-                Label("Quality  ${state.quality}")
-                CompactSlider(state.quality.toFloat(), 0f..100f, !locked) { vm.setQuality(it.toInt()) }
-            }
-            CompressionMode.TARGET_SIZE -> {
-                Label("Target size  ${state.targetSizeMb} MB")
-                CompactSlider(state.targetSizeMb.toFloat(), 8f..1024f, !locked) {
-                    vm.setTargetSizeMb(it.toInt().coerceIn(8, 2048))
+        if (state.kind != MediaKind.VIDEO || state.bitrateMode == BitrateModeOption.AUTO) {
+            when (state.mode) {
+                CompressionMode.QUALITY, CompressionMode.LOSSLESS_REMUX -> {
+                    Label("Quality  ${state.quality}")
+                    CompactSlider(state.quality.toFloat(), 0f..100f, !locked) { vm.setQuality(it.toInt()) }
                 }
-            }
-            CompressionMode.TARGET_BITRATE -> {
-                Label("Bitrate  ${state.targetBitrateKbps} kbps")
-                CompactSlider(state.targetBitrateKbps.toFloat(), 200f..20000f, !locked) {
-                    vm.setTargetBitrateKbps(it.toInt().coerceIn(200, 40000))
+                CompressionMode.TARGET_SIZE -> {
+                    Label("Target size  ${state.targetSizeMb} MB")
+                    CompactSlider(state.targetSizeMb.toFloat(), 8f..1024f, !locked) {
+                        vm.setTargetSizeMb(it.toInt().coerceIn(8, 2048))
+                    }
+                }
+                CompressionMode.TARGET_BITRATE -> {
+                    Label("Bitrate  ${state.targetBitrateKbps} kbps")
+                    CompactSlider(state.targetBitrateKbps.toFloat(), 200f..20000f, !locked) {
+                        vm.setTargetBitrateKbps(it.toInt().coerceIn(200, 40000))
+                    }
                 }
             }
         }
@@ -386,7 +391,13 @@ private fun SettingsPanel(state: UiState, vm: JobViewModel) {
                     .padding(vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("高级参数", fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                Text(
+                    if (state.bitrateMode == BitrateModeOption.AUTO) "高级参数"
+                    else "高级参数 · ${state.bitrateMode.name}",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f),
+                )
                 Icon(
                     if (state.advancedOpen) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
                     contentDescription = null,
@@ -403,6 +414,11 @@ private fun SettingsPanel(state: UiState, vm: JobViewModel) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AdvancedParams(state: UiState, vm: JobViewModel, locked: Boolean) {
+    val encoder = selectedVideoEncoder(state)
+    val complexityOk = encoder?.complexityRange != null
+    val nativeCq = encoder != null &&
+        encoder.supportsBitrateMode(EncoderCapabilities.BITRATE_MODE_CQ) &&
+        encoder.qualityRange != null
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Label("Bitrate mode")
         ChipRow {
@@ -410,6 +426,33 @@ private fun AdvancedParams(state: UiState, vm: JobViewModel, locked: Boolean) {
             MiniChip("VBR", state.bitrateMode == BitrateModeOption.VBR, !locked) { vm.setBitrateMode(BitrateModeOption.VBR) }
             MiniChip("CBR", state.bitrateMode == BitrateModeOption.CBR, !locked) { vm.setBitrateMode(BitrateModeOption.CBR) }
             MiniChip("CQ", state.bitrateMode == BitrateModeOption.CQ, !locked) { vm.setBitrateMode(BitrateModeOption.CQ) }
+        }
+        when (state.bitrateMode) {
+            BitrateModeOption.AUTO -> Label("Auto：跟随上方 画质 / 目标大小 / 码率")
+            BitrateModeOption.VBR -> {
+                Label("Bitrate（平均）  ${state.targetBitrateKbps} kbps")
+                CompactSlider(state.targetBitrateKbps.toFloat(), 200f..40000f, !locked) {
+                    vm.setTargetBitrateKbps(it.toInt().coerceIn(200, 40000))
+                }
+                Label("Max bitrate（峰值）  ${state.maxBitrateKbps} kbps")
+                CompactSlider(state.maxBitrateKbps.toFloat(), 200f..80000f, !locked) {
+                    vm.setMaxBitrateKbps(it.toInt().coerceIn(200, 80000))
+                }
+            }
+            BitrateModeOption.CBR -> {
+                Label("Bitrate（恒定）  ${state.targetBitrateKbps} kbps")
+                CompactSlider(state.targetBitrateKbps.toFloat(), 200f..40000f, !locked) {
+                    vm.setTargetBitrateKbps(it.toInt().coerceIn(200, 40000))
+                }
+            }
+            BitrateModeOption.CQ -> {
+                Label("Quality  ${state.quality}")
+                CompactSlider(state.quality.toFloat(), 0f..100f, !locked) { vm.setQuality(it.toInt()) }
+                Label(
+                    if (nativeCq) "恒定质量，码率随画面变化"
+                    else "该编码器无 CQ，用 QP 范围近似恒定质量",
+                )
+            }
         }
         Label("I-frame interval")
         ChipRow {
@@ -420,9 +463,12 @@ private fun AdvancedParams(state: UiState, vm: JobViewModel, locked: Boolean) {
         }
         Label("B-frames")
         ChipRow {
-            MiniChip("Auto", state.maxBFrames == null, !locked) { vm.setMaxBFrames(null) }
+            val baseline = state.profile == VideoProfileOption.BASELINE
+            MiniChip("Auto", state.maxBFrames == null && !baseline, !locked && !baseline) { vm.setMaxBFrames(null) }
             listOf(0, 1, 2, 3).forEach { n ->
-                MiniChip("$n", state.maxBFrames == n, !locked) { vm.setMaxBFrames(n) }
+                MiniChip("$n", state.maxBFrames == n || (baseline && n == 0), !locked && !baseline) {
+                    vm.setMaxBFrames(n)
+                }
             }
         }
         Label("Profile")
@@ -440,26 +486,37 @@ private fun AdvancedParams(state: UiState, vm: JobViewModel, locked: Boolean) {
         Label("Complexity")
         ChipRow {
             MiniChip("Auto", state.complexity == ComplexityOption.AUTO, !locked) { vm.setComplexity(ComplexityOption.AUTO) }
-            MiniChip("Low", state.complexity == ComplexityOption.LOW, !locked) { vm.setComplexity(ComplexityOption.LOW) }
-            MiniChip("High", state.complexity == ComplexityOption.HIGH, !locked) { vm.setComplexity(ComplexityOption.HIGH) }
+            MiniChip("Low", state.complexity == ComplexityOption.LOW, !locked && complexityOk) { vm.setComplexity(ComplexityOption.LOW) }
+            MiniChip("Medium", state.complexity == ComplexityOption.MEDIUM, !locked && complexityOk) { vm.setComplexity(ComplexityOption.MEDIUM) }
+            MiniChip("High", state.complexity == ComplexityOption.HIGH, !locked && complexityOk) { vm.setComplexity(ComplexityOption.HIGH) }
         }
+        if (!complexityOk) Label("此编码器不暴露 Complexity")
         Label("QP")
         ChipRow {
-            MiniChip("Auto", state.qpMin == null, !locked) { vm.setQpRange(null, null) }
-            MiniChip("Custom", state.qpMin != null, !locked) {
-                if (state.qpMin == null) vm.setQpRange(16, 36)
-            }
+            MiniChip("Auto", state.qpIMin == null, !locked) { vm.setQpCustom(false) }
+            MiniChip("Custom", state.qpIMin != null, !locked) { vm.setQpCustom(true) }
         }
-        if (state.qpMin != null && state.qpMax != null) {
-            Label("QP min  ${state.qpMin}")
-            CompactSlider(state.qpMin.toFloat(), 1f..51f, !locked) { min ->
-                vm.setQpRange(min.toInt(), maxOf(min.toInt(), state.qpMax ?: min.toInt()))
-            }
-            Label("QP max  ${state.qpMax}")
-            CompactSlider(state.qpMax.toFloat(), 1f..51f, !locked) { max ->
-                vm.setQpRange(minOf(state.qpMin ?: max.toInt(), max.toInt()), max.toInt())
-            }
+        if (state.qpIMin != null && state.qpIMax != null && state.qpPMin != null && state.qpPMax != null) {
+            Label("QP I min  ${state.qpIMin}")
+            CompactSlider(state.qpIMin.toFloat(), 1f..51f, !locked) { vm.setQpIMin(it.toInt()) }
+            Label("QP I max  ${state.qpIMax}")
+            CompactSlider(state.qpIMax.toFloat(), 1f..51f, !locked) { vm.setQpIMax(it.toInt()) }
+            Label("QP P min  ${state.qpPMin}")
+            CompactSlider(state.qpPMin.toFloat(), 1f..51f, !locked) { vm.setQpPMin(it.toInt()) }
+            Label("QP P max  ${state.qpPMax}")
+            CompactSlider(state.qpPMax.toFloat(), 1f..51f, !locked) { vm.setQpPMax(it.toInt()) }
         }
+    }
+}
+
+private fun selectedVideoEncoder(state: UiState): CodecCandidate? {
+    val mime = when (state.videoCodec) {
+        OutputVideoCodec.HEVC -> MimeTypes.HEVC
+        OutputVideoCodec.AVC -> MimeTypes.AVC
+        OutputVideoCodec.AV1 -> MimeTypes.AV1
+    }
+    return state.capabilities?.encoders?.firstOrNull {
+        it.isEncoder && it.mime.equals(mime, ignoreCase = true)
     }
 }
 

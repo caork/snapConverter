@@ -17,11 +17,18 @@ data class CodecCandidate(
     val bitrateModes: Set<Int>,
     val qualityRange: IntRange?,
     val complexityRange: IntRange?,
+    val profileLevels: List<Pair<Int, Int>> = emptyList(),
     val vendorParameters: List<String> = emptyList(),
 ) {
     val isQualcomm: Boolean get() = vendorFamily == VendorFamily.QUALCOMM
 
     fun supportsBitrateMode(mode: Int): Boolean = mode in bitrateModes
+
+    fun supportsProfile(profile: Int): Boolean =
+        profileLevels.isEmpty() || profileLevels.any { it.first == profile }
+
+    fun highestLevelFor(profile: Int): Int? =
+        profileLevels.filter { it.first == profile }.maxByOrNull { it.second }?.second
 
     fun supportsSize(width: Int, height: Int): Boolean {
         if (maxWidth <= 0 || maxHeight <= 0) return true
@@ -52,6 +59,7 @@ data class CodecCandidate(
             }
             val quality = encoder?.qualityRange?.let { it.lower..it.upper }
             val complexity = encoder?.complexityRange?.let { it.lower..it.upper }
+            val profileLevels = caps?.profileLevels?.map { it.profile to it.level }.orEmpty()
             return CodecCandidate(
                 name = info.name,
                 mime = mime,
@@ -65,6 +73,7 @@ data class CodecCandidate(
                 bitrateModes = modes,
                 qualityRange = quality,
                 complexityRange = complexity,
+                profileLevels = profileLevels,
             )
         }
     }

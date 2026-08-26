@@ -61,4 +61,28 @@ object QualityStrategy {
         val span = encoderRange.last - encoderRange.first
         return (encoderRange.first + span * q).toInt().coerceIn(encoderRange.first, encoderRange.last)
     }
+
+    /**
+     * QP window used when the encoder has no CQ bitrate mode.
+     * Higher AppQuality → lower QP (better looking, larger file).
+     */
+    data class QpWindow(
+        val iMin: Int,
+        val iMax: Int,
+        val pMin: Int,
+        val pMax: Int,
+        val bMin: Int,
+        val bMax: Int,
+    )
+
+    fun qpWindowForQuality(appQuality: Int): QpWindow {
+        val q = appQuality.coerceIn(0, 100)
+        val pMax = (48 - q * 30 / 100).coerceIn(18, 48)
+        val pMin = (pMax - 10).coerceAtLeast(1)
+        val iMax = (pMax - 2).coerceAtLeast(1)
+        val iMin = (pMin - 2).coerceAtLeast(1)
+        val bMax = (pMax + 2).coerceAtMost(51)
+        val bMin = (pMin + 2).coerceAtMost(bMax)
+        return QpWindow(iMin, iMax, pMin, pMax, bMin, bMax)
+    }
 }

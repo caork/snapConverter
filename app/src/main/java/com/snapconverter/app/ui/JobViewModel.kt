@@ -12,6 +12,8 @@ import com.snapconverter.app.SnapConverterApp
 import com.snapconverter.engine.device.DeviceCapabilityReport
 import com.snapconverter.engine.media.CaptureTimestamp
 import com.snapconverter.engine.media.Mp4TimestampPatcher
+import com.snapconverter.engine.codec.MimeTypes
+import com.snapconverter.engine.policy.BitrateEstimator
 import com.snapconverter.engine.policy.BitrateModeOption
 import com.snapconverter.engine.policy.ComplexityOption
 import com.snapconverter.engine.policy.CompressionMode
@@ -22,6 +24,7 @@ import com.snapconverter.engine.policy.OutputFps
 import com.snapconverter.engine.policy.OutputImageCodec
 import com.snapconverter.engine.policy.OutputResolution
 import com.snapconverter.engine.policy.OutputVideoCodec
+import com.snapconverter.engine.policy.QualityStrategy
 import com.snapconverter.engine.policy.VideoProfileOption
 import com.snapconverter.engine.policy.VideoSourceInfo
 import com.snapconverter.engine.progress.EncodeProgress
@@ -57,12 +60,15 @@ data class UiState(
     val preserveCaptureTime: Boolean = true,
     val advancedOpen: Boolean = false,
     val bitrateMode: BitrateModeOption = BitrateModeOption.AUTO,
+    val maxBitrateKbps: Int = 8000,
     val iFrameIntervalSec: Int? = null,
     val maxBFrames: Int? = null,
     val profile: VideoProfileOption = VideoProfileOption.AUTO,
     val complexity: ComplexityOption = ComplexityOption.AUTO,
-    val qpMin: Int? = null,
-    val qpMax: Int? = null,
+    val qpIMin: Int? = null,
+    val qpIMax: Int? = null,
+    val qpPMin: Int? = null,
+    val qpPMax: Int? = null,
     val progress: EncodeProgress = EncodeProgress(0f),
     val message: String? = null,
     val outputUri: Uri? = null,
@@ -170,23 +176,122 @@ class JobViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun setMode(mode: CompressionMode) = _state.update { it.copy(mode = mode) }
+    fun setMode(mode: CompressionMode) = _state.update {
+        it.copy(mode = mode, bitrateMode = BitrateModeOption.AUTO)
+    }
     fun setQuality(q: Int) = _state.update { it.copy(quality = q) }
     fun setTargetSizeMb(v: Int) = _state.update { it.copy(targetSizeMb = v) }
-    fun setTargetBitrateKbps(v: Int) = _state.update { it.copy(targetBitrateKbps = v) }
-    fun setVideoCodec(c: OutputVideoCodec) = _state.update { it.copy(videoCodec = c) }
+    fun setTargetBitrateKbps(v: Int) = _state.update {
+        val max = maxOf(it.maxBitrateKbps, (v * 1.5).toInt())
+        it.copy(targetBitrateKbps = v, maxBitrateKbps = max.coerceAtMost(80_000))
+    }
+    fun setMaxBitrateKbps(v: Int) = _state.update {
+        it.copy(maxBitrateKbps = v.coerceAtLeast(it.targetBitrateKbps))
+    }
+    fun setVideoCodec(c: OutputVideoCodec) = _state.update {
+        val profile = if (profileAllowed(c, it.profile)) it.profile else VideoProfileOption.AUTO
+        it.copy(
+            videoCodec = c,
+            profile = profile,
+            maxBFrames = if (profile == VideoProfileOption.BASELINE) 0 else it.maxBFrames,
+        )
+    }
     fun setImageCodec(c: OutputImageCodec) = _state.update { it.copy(imageCodec = c) }
     fun setResolution(r: OutputResolution) = _state.update { it.copy(resolution = r) }
     fun setFps(f: OutputFps) = _state.update { it.copy(fps = f) }
     fun setPreserveCaptureTime(v: Boolean) = _state.update { it.copy(preserveCaptureTime = v) }
     fun setAdvancedOpen(v: Boolean) = _state.update { it.copy(advancedOpen = v) }
-    fun setBitrateMode(v: BitrateModeOption) = _state.update { it.copy(bitrateMode = v) }
+    fun setBitrateMode(v: BitrateModeOption) = _state.update {
+        val enteringRateControl =
+            it.bitrateMode == BitrateModeOption.AUTO &&
+                (v == BitrateModeOption.VBR || v == BitrateModeOption.CBR)
+        val seeded = if (enteringRateControl) estimatedBitrateKbps(it) else it.targetBitrateKbps
+        it.copy(
+            bitrateMode = v,
+            targetBitrateKbps = seeded,
+            maxBitrateKbps = if (v == BitrateModeOption.VBR) {
+                maxOf(it.maxBitrateKbps, (seeded * 2).coerceAtMost(40_000))
+            } else {
+                it.maxBitrateKbps
+            },
+        )
+    }
     fun setIFrameIntervalSec(v: Int?) = _state.update { it.copy(iFrameIntervalSec = v) }
     fun setMaxBFrames(v: Int?) = _state.update { it.copy(maxBFrames = v) }
-    fun setProfile(v: VideoProfileOption) = _state.update { it.copy(profile = v) }
+    fun setProfile(v: VideoProfileOption) = _state.update {
+        it.copy(
+            profile = v,
+            maxBFrames = if (v == VideoProfileOption.BASELINE) 0 else it.maxBFrames,
+        )
+    }
     fun setComplexity(v: ComplexityOption) = _state.update { it.copy(complexity = v) }
-    fun setQpRange(min: Int?, max: Int?) = _state.update { it.copy(qpMin = min, qpMax = max) }
+    fun setQpCustom(enabled: Boolean) = _state.update {
+        if (enabled) {
+            it.copy(qpIMin = 16, qpIMax = 36, qpPMin = 18, qpPMax = 40)
+        } else {
+            it.copy(qpIMin = null, qpIMax = null, qpPMin = null, qpPMax = null)
+        }
+    }
+    fun setQpIMin(v: Int) = _state.update { it.copy(qpIMin = v, qpIMax = maxOf(v, it.qpIMax ?: v)) }
+    fun setQpIMax(v: Int) = _state.update { it.copy(qpIMax = v, qpIMin = minOf(v, it.qpIMin ?: v)) }
+    fun setQpPMin(v: Int) = _state.update { it.copy(qpPMin = v, qpPMax = maxOf(v, it.qpPMax ?: v)) }
+    fun setQpPMax(v: Int) = _state.update { it.copy(qpPMax = v, qpPMin = minOf(v, it.qpPMin ?: v)) }
     fun clearError() = _state.update { it.copy(error = null) }
+
+    private fun profileAllowed(codec: OutputVideoCodec, profile: VideoProfileOption): Boolean =
+        when (codec) {
+            OutputVideoCodec.AVC -> profile in setOf(
+                VideoProfileOption.AUTO,
+                VideoProfileOption.BASELINE,
+                VideoProfileOption.MAIN,
+                VideoProfileOption.HIGH,
+            )
+            OutputVideoCodec.HEVC, OutputVideoCodec.AV1 -> profile in setOf(
+                VideoProfileOption.AUTO,
+                VideoProfileOption.MAIN,
+                VideoProfileOption.MAIN10,
+            )
+        }
+
+    private fun estimatedBitrateKbps(state: UiState): Int {
+        val video = state.videoInfo ?: return state.targetBitrateKbps
+        return when (state.mode) {
+            CompressionMode.TARGET_BITRATE -> state.targetBitrateKbps
+            CompressionMode.TARGET_SIZE -> {
+                val durationSec = (video.durationUs / 1_000_000.0).coerceAtLeast(0.1)
+                val audio = video.audioBitrateBps.takeIf { it > 0 }
+                    ?: BitrateEstimator.DEFAULT_AUDIO_BITRATE_BPS
+                BitrateEstimator.videoBitrateForTargetSize(
+                    state.targetSizeMb * 1024L * 1024L,
+                    durationSec,
+                    audio,
+                ) / 1000
+            }
+            else -> {
+                val mime = when (state.videoCodec) {
+                    OutputVideoCodec.AVC -> MimeTypes.AVC
+                    else -> MimeTypes.HEVC
+                }
+                val longCap = when (state.resolution) {
+                    OutputResolution.ORIGINAL -> Int.MAX_VALUE
+                    OutputResolution.UHD_2160 -> 3840
+                    OutputResolution.QHD_1440 -> 2560
+                    OutputResolution.FHD_1080 -> 1920
+                    OutputResolution.HD_720 -> 1280
+                }
+                var w = video.displayWidth
+                var h = video.displayHeight
+                val longEdge = maxOf(w, h)
+                if (longEdge > longCap) {
+                    val scale = longCap.toDouble() / longEdge
+                    w = (w * scale).toInt()
+                    h = (h * scale).toInt()
+                }
+                val bitrate1080 = QualityStrategy.interpolate(state.quality).bitrate1080pHevcBps
+                QualityStrategy.scaleBitrateForPixels(bitrate1080, w, h, mime) / 1000
+            }
+        }.coerceIn(200, 40_000)
+    }
 
     fun start() {
         val snapshot = _state.value
@@ -212,12 +317,15 @@ class JobViewModel(application: Application) : AndroidViewModel(application) {
             resolution = snapshot.resolution,
             fps = snapshot.fps,
             bitrateMode = snapshot.bitrateMode,
+            maxBitrateBps = snapshot.maxBitrateKbps * 1000,
             iFrameIntervalSec = snapshot.iFrameIntervalSec,
             maxBFrames = snapshot.maxBFrames,
             profile = snapshot.profile,
             complexity = snapshot.complexity,
-            qpMin = snapshot.qpMin,
-            qpMax = snapshot.qpMax,
+            qpIMin = snapshot.qpIMin,
+            qpIMax = snapshot.qpIMax,
+            qpPMin = snapshot.qpPMin,
+            qpPMax = snapshot.qpPMax,
         )
         viewModelScope.launch {
             _state.update {

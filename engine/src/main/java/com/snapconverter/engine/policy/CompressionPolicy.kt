@@ -42,35 +42,41 @@ class CompressionPolicy {
             mime,
         )
 
-        val bitrate = when (request.mode) {
-            CompressionMode.TARGET_BITRATE ->
+        val estimatedForSize = BitrateEstimator.videoBitrateForTargetSize(
+            targetBytes = request.targetSizeBytes ?: 50L * 1024 * 1024,
+            durationSeconds = durationSec,
+            audioBitrateBps = source.audioBitrateBps.takeIf { it > 0 }
+                ?: BitrateEstimator.DEFAULT_AUDIO_BITRATE_BPS,
+        )
+        val bitrate = when (request.bitrateMode) {
+            BitrateModeOption.VBR, BitrateModeOption.CBR ->
                 request.targetBitrateBps ?: qualityBitrate
-            CompressionMode.TARGET_SIZE ->
-                BitrateEstimator.videoBitrateForTargetSize(
-                    targetBytes = request.targetSizeBytes ?: 50L * 1024 * 1024,
-                    durationSeconds = durationSec,
-                    audioBitrateBps = source.audioBitrateBps.takeIf { it > 0 }
-                        ?: BitrateEstimator.DEFAULT_AUDIO_BITRATE_BPS,
-                )
-            CompressionMode.LOSSLESS_REMUX -> source.bitrateBps.takeIf { it > 0 } ?: qualityBitrate
-            CompressionMode.QUALITY -> qualityBitrate
+            BitrateModeOption.CQ -> qualityBitrate
+            BitrateModeOption.AUTO -> when (request.mode) {
+                CompressionMode.TARGET_BITRATE -> request.targetBitrateBps ?: qualityBitrate
+                CompressionMode.TARGET_SIZE -> estimatedForSize
+                CompressionMode.LOSSLESS_REMUX -> source.bitrateBps.takeIf { it > 0 } ?: qualityBitrate
+                CompressionMode.QUALITY -> qualityBitrate
+            }
         }.coerceIn(80_000, 80_000_000)
 
         val cqSupported = encoder.supportsBitrateMode(EncoderCapabilities.BITRATE_MODE_CQ) &&
-            encoder.qualityRange != null &&
-            request.mode == CompressionMode.QUALITY
+            encoder.qualityRange != null
+        val vbrSupported = encoder.supportsBitrateMode(EncoderCapabilities.BITRATE_MODE_VBR)
+        val cbrSupported = encoder.supportsBitrateMode(EncoderCapabilities.BITRATE_MODE_CBR)
 
         val bitrateMode = when (request.bitrateMode) {
-            BitrateModeOption.VBR -> EncoderCapabilities.BITRATE_MODE_VBR
-            BitrateModeOption.CBR -> EncoderCapabilities.BITRATE_MODE_CBR
-            BitrateModeOption.CQ -> EncoderCapabilities.BITRATE_MODE_CQ
+            BitrateModeOption.VBR -> pickRateControl(vbrSupported, cbrSupported, preferVbr = true)
+            BitrateModeOption.CBR -> pickRateControl(vbrSupported, cbrSupported, preferVbr = false)
+            BitrateModeOption.CQ -> if (cqSupported) {
+                EncoderCapabilities.BITRATE_MODE_CQ
+            } else {
+                pickRateControl(vbrSupported, cbrSupported, preferVbr = true)
+            }
             BitrateModeOption.AUTO -> when {
-                cqSupported -> EncoderCapabilities.BITRATE_MODE_CQ
-                encoder.supportsBitrateMode(EncoderCapabilities.BITRATE_MODE_VBR) ->
-                    EncoderCapabilities.BITRATE_MODE_VBR
-                encoder.supportsBitrateMode(EncoderCapabilities.BITRATE_MODE_CBR) ->
-                    EncoderCapabilities.BITRATE_MODE_CBR
-                else -> EncoderCapabilities.BITRATE_MODE_VBR
+                request.mode == CompressionMode.QUALITY && cqSupported ->
+                    EncoderCapabilities.BITRATE_MODE_CQ
+                else -> pickRateControl(vbrSupported, cbrSupported, preferVbr = true)
             }
         }
 
@@ -82,10 +88,40 @@ class CompressionPolicy {
         }
 
         val complexity = when (request.complexity) {
-            ComplexityOption.AUTO -> encoder.complexityRange?.last
+            ComplexityOption.AUTO -> null
             ComplexityOption.LOW -> encoder.complexityRange?.first
             ComplexityOption.HIGH -> encoder.complexityRange?.last
+            ComplexityOption.MEDIUM -> encoder.complexityRange?.let { (it.first + it.last) / 2 }
         }
+
+        val profile = profileFor(request.profile, mime)?.takeIf { encoder.supportsProfile(it) }
+        val level = profile?.let { encoder.highestLevelFor(it) }
+        val baseline = profile == MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline
+        val maxB = if (baseline) {
+            0
+        } else {
+            request.maxBFrames ?: if (mime == MimeTypes.HEVC || mime == MimeTypes.AV1) 1 else 0
+        }
+        val maxBitrate = when (bitrateMode) {
+            EncoderCapabilities.BITRATE_MODE_CBR -> bitrate
+            EncoderCapabilities.BITRATE_MODE_VBR ->
+                request.maxBitrateBps?.takeIf { it > bitrate }
+            else -> null
+        }
+
+        val cqQpFallback = request.bitrateMode == BitrateModeOption.CQ && !useCq &&
+            request.qpIMin == null
+        val qp = if (cqQpFallback) {
+            QualityStrategy.qpWindowForQuality(request.appQuality)
+        } else {
+            null
+        }
+        val qpIMin = request.qpIMin ?: qp?.iMin
+        val qpIMax = request.qpIMax ?: qp?.iMax
+        val qpPMin = request.qpPMin ?: qp?.pMin
+        val qpPMax = request.qpPMax ?: qp?.pMax
+        val qpBMin = if (maxB > 0) qpPMin?.let { (it + 2).coerceAtMost(51) } else null
+        val qpBMax = if (maxB > 0) qpPMax?.let { (it + 2).coerceAtMost(51) } else null
 
         return VideoEncodePlan(
             mime = mime,
@@ -93,19 +129,22 @@ class CompressionPolicy {
             height = height,
             frameRate = fps.coerceIn(1, 120),
             bitrateBps = bitrate,
+            maxBitrateBps = maxBitrate,
             bitrateMode = bitrateMode,
             codecQuality = codecQuality,
             iFrameIntervalSec = request.iFrameIntervalSec
                 ?: if (request.appQuality >= 85) 2 else 3,
-            maxBFrames = request.maxBFrames
-                ?: if (mime == MimeTypes.HEVC || mime == MimeTypes.AV1) 1 else 0,
+            maxBFrames = maxB,
             operatingRate = fps.coerceIn(1, 120),
-            profile = profileFor(request.profile, mime),
+            profile = profile,
+            level = level,
             complexity = complexity,
-            qpIMin = request.qpMin,
-            qpIMax = request.qpMax,
-            qpPMin = request.qpMin,
-            qpPMax = request.qpMax,
+            qpIMin = qpIMin,
+            qpIMax = qpIMax,
+            qpPMin = qpPMin,
+            qpPMax = qpPMax,
+            qpBMin = qpBMin,
+            qpBMax = qpBMax,
         )
     }
 
@@ -163,15 +202,32 @@ class CompressionPolicy {
 
     private fun alignEven(value: Int): Int = (value / 2 * 2).coerceAtLeast(2)
 
+    private fun pickRateControl(vbr: Boolean, cbr: Boolean, preferVbr: Boolean): Int {
+        return when {
+            preferVbr && vbr -> EncoderCapabilities.BITRATE_MODE_VBR
+            !preferVbr && cbr -> EncoderCapabilities.BITRATE_MODE_CBR
+            vbr -> EncoderCapabilities.BITRATE_MODE_VBR
+            cbr -> EncoderCapabilities.BITRATE_MODE_CBR
+            else -> EncoderCapabilities.BITRATE_MODE_VBR
+        }
+    }
+
     private fun profileFor(option: VideoProfileOption, mime: String): Int? = when (option) {
         VideoProfileOption.AUTO -> null
-        VideoProfileOption.BASELINE -> MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline
-        VideoProfileOption.MAIN -> if (mime == MimeTypes.HEVC) {
-            MediaCodecInfo.CodecProfileLevel.HEVCProfileMain
-        } else {
-            MediaCodecInfo.CodecProfileLevel.AVCProfileMain
+        VideoProfileOption.BASELINE ->
+            MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline.takeIf { mime == MimeTypes.AVC }
+        VideoProfileOption.MAIN -> when (mime) {
+            MimeTypes.HEVC -> MediaCodecInfo.CodecProfileLevel.HEVCProfileMain
+            MimeTypes.AVC -> MediaCodecInfo.CodecProfileLevel.AVCProfileMain
+            MimeTypes.AV1 -> MediaCodecInfo.CodecProfileLevel.AV1ProfileMain8
+            else -> null
         }
-        VideoProfileOption.HIGH -> MediaCodecInfo.CodecProfileLevel.AVCProfileHigh
-        VideoProfileOption.MAIN10 -> MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10
+        VideoProfileOption.HIGH ->
+            MediaCodecInfo.CodecProfileLevel.AVCProfileHigh.takeIf { mime == MimeTypes.AVC }
+        VideoProfileOption.MAIN10 -> when (mime) {
+            MimeTypes.HEVC -> MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10
+            MimeTypes.AV1 -> MediaCodecInfo.CodecProfileLevel.AV1ProfileMain10
+            else -> null
+        }
     }
 }
