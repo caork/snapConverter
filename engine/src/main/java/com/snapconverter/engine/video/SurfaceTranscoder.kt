@@ -15,6 +15,7 @@ import com.snapconverter.engine.ScLog
 import com.snapconverter.engine.codec.CodecCandidate
 import com.snapconverter.engine.codec.HardwareCodecSelector
 import com.snapconverter.engine.gpu.GpuFrameProcessor
+import com.snapconverter.engine.media.VideoGeometry
 import com.snapconverter.engine.policy.VideoEncodePlan
 import com.snapconverter.engine.policy.VideoSourceInfo
 import com.snapconverter.engine.progress.EncodeProgress
@@ -61,7 +62,8 @@ class SurfaceTranscoder(
             encoderCodec.start()
             ScLog.i(
                 "encoder=${encoder.name} decoder=${decoder.name} " +
-                    "${plan.width}x${plan.height}@${plan.frameRate} " +
+                    "coded=${source.width}x${source.height} rot=${source.rotation} " +
+                    "encode=${plan.width}x${plan.height}@${plan.frameRate} " +
                     "br=${plan.bitrateBps} mode=${plan.bitrateMode} vendorKeys=${vendorKeys.size}",
             )
 
@@ -148,7 +150,7 @@ class SurfaceTranscoder(
                                     presentationTimeUs = pts,
                                     outputWidth = plan.width,
                                     outputHeight = plan.height,
-                                    extraRotationDegrees = source.rotation,
+                                    extraRotationDegrees = VideoGeometry.glRotationDegrees(source.rotation),
                                 )
                                 lastEncodedPts = pts
                                 framesEncoded++

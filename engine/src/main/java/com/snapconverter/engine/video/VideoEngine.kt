@@ -7,7 +7,9 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import com.snapconverter.engine.codec.HardwareCodecSelector
+import com.snapconverter.engine.ScLog
 import com.snapconverter.engine.media.CaptureTimestamp
+import com.snapconverter.engine.media.VideoGeometry
 import com.snapconverter.engine.policy.CompressionPolicy
 import com.snapconverter.engine.policy.CompressionRequest
 import com.snapconverter.engine.policy.VideoSourceInfo
@@ -38,11 +40,10 @@ class VideoEngine(
                 val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
                 if (mime.startsWith("video/")) {
                     videoMime = mime
-                    width = format.getInteger(MediaFormat.KEY_WIDTH)
-                    height = format.getInteger(MediaFormat.KEY_HEIGHT)
-                    if (format.containsKey(MediaFormat.KEY_ROTATION)) {
-                        rotation = format.getInteger(MediaFormat.KEY_ROTATION)
-                    }
+                    val coded = codedFrameSize(format)
+                    width = coded.first
+                    height = coded.second
+                    rotation = formatInt(format, MediaFormat.KEY_ROTATION)
                     if (format.containsKey(MediaFormat.KEY_FRAME_RATE)) {
                         frameRate = try {
                             format.getInteger(MediaFormat.KEY_FRAME_RATE).toFloat()
@@ -67,9 +68,29 @@ class VideoEngine(
                 width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
                 height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
             }
-            if (rotation == 0) {
-                rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
-            }
+            val retrieverRotation = retriever.extractMetadata(
+                MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION,
+            )?.toIntOrNull() ?: 0
+            val retrieverWidth = retriever.extractMetadata(
+                MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH,
+            )?.toIntOrNull() ?: 0
+            val retrieverHeight = retriever.extractMetadata(
+                MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT,
+            )?.toIntOrNull() ?: 0
+            rotation = VideoGeometry.detectRotation(
+                extractorRotation = rotation,
+                retrieverRotation = retrieverRotation,
+                codedWidth = width,
+                codedHeight = height,
+                retrieverWidth = retrieverWidth,
+                retrieverHeight = retrieverHeight,
+            )
+            ScLog.i(
+                "inspect coded=${width}x${height} rot=$rotation " +
+                    "(extractor/retriever=$retrieverRotation ${retrieverWidth}x${retrieverHeight}) " +
+                    "display=${VideoGeometry.displayWidth(width, height, rotation)}x" +
+                    "${VideoGeometry.displayHeight(width, height, rotation)}",
+            )
             if (durationUs == 0L) {
                 durationUs = (retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L) * 1000
             }
@@ -97,6 +118,23 @@ class VideoEngine(
         }
     }
 
+    private fun codedFrameSize(format: MediaFormat): Pair<Int, Int> {
+        var w = format.getInteger(MediaFormat.KEY_WIDTH)
+        var h = format.getInteger(MediaFormat.KEY_HEIGHT)
+        if (format.containsKey("crop-right") && format.containsKey("crop-left")) {
+            w = format.getInteger("crop-right") - format.getInteger("crop-left") + 1
+        }
+        if (format.containsKey("crop-bottom") && format.containsKey("crop-top")) {
+            h = format.getInteger("crop-bottom") - format.getInteger("crop-top") + 1
+        }
+        return w to h
+    }
+
+    private fun formatInt(format: MediaFormat, key: String): Int {
+        if (!format.containsKey(key)) return 0
+        return runCatching { format.getInteger(key) }.getOrDefault(0)
+    }
+
     fun compress(
         input: Uri,
         outputPfd: ParcelFileDescriptor,
@@ -107,8 +145,8 @@ class VideoEngine(
         val decoder = selector.selectDecoder(source.mime)
         val encoder = selector.selectPreferredVideoEncoder(
             preferredMimes = policy.preferredMimes(request.videoCodec),
-            width = source.width,
-            height = source.height,
+            width = source.displayWidth,
+            height = source.displayHeight,
         )
         val plan = policy.planVideo(source, request, encoder)
         SurfaceTranscoder(context, selector).transcode(

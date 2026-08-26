@@ -223,7 +223,8 @@ private fun MediaHero(state: UiState, onChange: () -> Unit) {
                     val video = state.videoInfo
                     val image = state.imageInfo
                     if (video != null) {
-                        append("${video.width}×${video.height}")
+                        append("${video.displayWidth}×${video.displayHeight}")
+                        append(if (video.isPortrait) " · 竖屏" else " · 横屏")
                         append(" · ${formatDuration(video.durationUs)}")
                         append(" · ${formatSize(state.fileSizeBytes)}")
                     } else if (image != null) {

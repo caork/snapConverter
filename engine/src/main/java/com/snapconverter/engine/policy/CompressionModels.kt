@@ -1,5 +1,7 @@
 package com.snapconverter.engine.policy
 
+import com.snapconverter.engine.media.VideoGeometry
+
 enum class MediaKind { VIDEO, IMAGE }
 
 enum class CompressionMode { QUALITY, TARGET_SIZE, TARGET_BITRATE, LOSSLESS_REMUX }
@@ -42,7 +44,11 @@ data class VideoSourceInfo(
     val displayName: String = "",
     val fileSizeBytes: Long = 0,
     val captureTimeMs: Long? = null,
-)
+) {
+    val displayWidth: Int get() = VideoGeometry.displayWidth(width, height, rotation)
+    val displayHeight: Int get() = VideoGeometry.displayHeight(width, height, rotation)
+    val isPortrait: Boolean get() = displayHeight > displayWidth
+}
 
 data class ImageSourceInfo(
     val width: Int,
