@@ -11,7 +11,6 @@ import androidx.activity.viewModels
 import com.snapconverter.app.ui.JobViewModel
 import com.snapconverter.app.ui.screens.HomeScreen
 import com.snapconverter.app.ui.theme.SnapConverterTheme
-import com.snapconverter.engine.policy.MediaKind
 
 class MainActivity : ComponentActivity() {
     private val viewModel: JobViewModel by viewModels()
@@ -34,23 +33,39 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIncoming(intent: Intent) {
-        val uri: Uri = incomingUri(intent) ?: return
+        val uri = incomingUri(intent) ?: return
         val mime = intent.type ?: contentResolver.getType(uri).orEmpty()
-        val kind = if (mime.startsWith("image/")) MediaKind.IMAGE else MediaKind.VIDEO
+        val name = uri.lastPathSegment.orEmpty()
+        val kind = JobViewModel.detectKind(mime, name)
         val autostart = intent.getBooleanExtra(EXTRA_AUTOSTART, false)
         viewModel.onPicked(uri, kind, autostart)
     }
 
     private fun incomingUri(intent: Intent): Uri? {
-        if (intent.action == Intent.ACTION_SEND) {
-            return if (Build.VERSION.SDK_INT >= 33) {
-                intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
-            } else {
-                @Suppress("DEPRECATION")
-                intent.getParcelableExtra(Intent.EXTRA_STREAM)
-            }
+        return when (intent.action) {
+            Intent.ACTION_SEND -> extraStream(intent)
+            Intent.ACTION_SEND_MULTIPLE -> extraStreamList(intent)?.firstOrNull()
+            Intent.ACTION_VIEW, Intent.ACTION_EDIT -> intent.data
+            else -> intent.data
         }
-        return intent.data
+    }
+
+    private fun extraStream(intent: Intent): Uri? {
+        return if (Build.VERSION.SDK_INT >= 33) {
+            intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(Intent.EXTRA_STREAM)
+        }
+    }
+
+    private fun extraStreamList(intent: Intent): List<Uri>? {
+        return if (Build.VERSION.SDK_INT >= 33) {
+            intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM)
+        }
     }
 
     companion object {

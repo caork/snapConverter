@@ -11,7 +11,8 @@ import com.snapconverter.engine.policy.CompressionRequest
 import com.snapconverter.engine.policy.ImageSourceInfo
 import com.snapconverter.engine.policy.MediaKind
 import com.snapconverter.engine.policy.VideoSourceInfo
-import com.snapconverter.engine.video.TranscodeProgress
+import com.snapconverter.engine.progress.EncodeProgress
+import com.snapconverter.engine.progress.EncodeProgressListener
 import com.snapconverter.engine.video.VideoEngine
 
 /**
@@ -37,7 +38,7 @@ class CompressionEngine(
         input: Uri,
         outputPfd: ParcelFileDescriptor,
         request: CompressionRequest,
-        progress: TranscodeProgress? = null,
+        progress: EncodeProgressListener? = null,
     ) {
         val caps = probeDevice()
         if (!caps.v1Supported) {
@@ -48,7 +49,11 @@ class CompressionEngine(
         }
         when (kind) {
             MediaKind.VIDEO -> video.compress(input, outputPfd, request, progress)
-            MediaKind.IMAGE -> image.compress(input, outputPfd, request)
+            MediaKind.IMAGE -> {
+                progress?.onProgress(EncodeProgress(ratio = 0.05f))
+                image.compress(input, outputPfd, request)
+                progress?.onProgress(EncodeProgress(ratio = 1f))
+            }
         }
     }
 }

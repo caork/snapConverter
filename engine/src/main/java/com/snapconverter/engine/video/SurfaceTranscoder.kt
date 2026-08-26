@@ -9,6 +9,7 @@ import android.media.MediaMuxer
 import android.net.Uri
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import android.view.Surface
 import com.snapconverter.engine.ScLog
 import com.snapconverter.engine.codec.CodecCandidate
@@ -16,11 +17,9 @@ import com.snapconverter.engine.codec.HardwareCodecSelector
 import com.snapconverter.engine.gpu.GpuFrameProcessor
 import com.snapconverter.engine.policy.VideoEncodePlan
 import com.snapconverter.engine.policy.VideoSourceInfo
+import com.snapconverter.engine.progress.EncodeProgress
+import com.snapconverter.engine.progress.EncodeProgressListener
 import java.nio.ByteBuffer
-
-fun interface TranscodeProgress {
-    fun onProgress(ratio: Float)
-}
 
 /**
  * Extract → hardware decode to Surface → GLES → hardware encode Surface → mux.
@@ -38,7 +37,7 @@ class SurfaceTranscoder(
         decoder: CodecCandidate,
         encoder: CodecCandidate,
         plan: VideoEncodePlan,
-        progress: TranscodeProgress? = null,
+        progress: EncodeProgressListener? = null,
     ) {
         val extractor = MediaExtractor()
         var decoderCodec: MediaCodec? = null
@@ -82,6 +81,20 @@ class SurfaceTranscoder(
             val durationUs = source.durationUs.coerceAtLeast(1L)
             val minFrameIntervalUs = 1_000_000L / plan.frameRate
             var lastEncodedPts = -minFrameIntervalUs
+            val startedAt = SystemClock.elapsedRealtime()
+            var framesEncoded = 0
+            var bytesWritten = 0L
+            fun emit(ratio: Float, pts: Long = lastEncodedPts) {
+                progress?.onProgress(
+                    EncodeProgress(
+                        ratio = ratio.coerceIn(0f, 1f),
+                        framesEncoded = framesEncoded,
+                        bytesWritten = bytesWritten,
+                        elapsedMs = SystemClock.elapsedRealtime() - startedAt,
+                        presentationTimeUs = pts,
+                    ),
+                )
+            }
             var videoTrackIndex = -1
             var audioTrackIndex = -1
             var audioExtractor: MediaExtractor? = null
@@ -138,7 +151,8 @@ class SurfaceTranscoder(
                                     extraRotationDegrees = source.rotation,
                                 )
                                 lastEncodedPts = pts
-                                progress?.onProgress((pts.toDouble() / durationUs).toFloat().coerceIn(0f, 0.99f))
+                                framesEncoded++
+                                emit((pts.toDouble() / durationUs).toFloat().coerceIn(0f, 0.99f), pts)
                             }
                             if (eos) {
                                 decoderDone = true
@@ -171,6 +185,7 @@ class SurfaceTranscoder(
                                 encoded.position(encoderBufferInfo.offset)
                                 encoded.limit(encoderBufferInfo.offset + encoderBufferInfo.size)
                                 muxer.writeSampleData(videoTrackIndex, encoded, encoderBufferInfo)
+                                bytesWritten += encoderBufferInfo.size
                             }
                         }
                         encoderCodec.releaseOutputBuffer(encIndex, false)
@@ -185,7 +200,7 @@ class SurfaceTranscoder(
                 copyAudio(audioExtractor, muxer, audioTrackIndex)
             }
             audioExtractor?.release()
-            progress?.onProgress(1f)
+            emit(1f)
             ScLog.i("transcode loop finished, releasing EGL then codecs")
         } finally {
             // EGL must drop the encoder input Surface before MediaCodec.stop(),

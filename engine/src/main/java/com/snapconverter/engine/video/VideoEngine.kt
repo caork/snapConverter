@@ -7,9 +7,11 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import com.snapconverter.engine.codec.HardwareCodecSelector
+import com.snapconverter.engine.media.CaptureTimestamp
 import com.snapconverter.engine.policy.CompressionPolicy
 import com.snapconverter.engine.policy.CompressionRequest
 import com.snapconverter.engine.policy.VideoSourceInfo
+import com.snapconverter.engine.progress.EncodeProgressListener
 
 class VideoEngine(
     private val context: Context,
@@ -74,6 +76,7 @@ class VideoEngine(
             if (bitrate == 0) {
                 bitrate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull() ?: 0
             }
+            val identity = CaptureTimestamp.read(context, uri, videoMime)
             return VideoSourceInfo(
                 width = width,
                 height = height,
@@ -84,6 +87,9 @@ class VideoEngine(
                 mime = videoMime,
                 audioMime = audioMime,
                 audioBitrateBps = audioBitrate,
+                displayName = identity.displayName,
+                fileSizeBytes = identity.fileSizeBytes,
+                captureTimeMs = identity.captureTimeMs,
             )
         } finally {
             extractor.release()
@@ -95,7 +101,7 @@ class VideoEngine(
         input: Uri,
         outputPfd: ParcelFileDescriptor,
         request: CompressionRequest,
-        progress: TranscodeProgress? = null,
+        progress: EncodeProgressListener? = null,
     ) {
         val source = inspect(input)
         val decoder = selector.selectDecoder(source.mime)

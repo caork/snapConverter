@@ -17,6 +17,7 @@ import com.snapconverter.engine.gpu.WindowSurface
 import com.snapconverter.engine.policy.CompressionPolicy
 import com.snapconverter.engine.policy.CompressionRequest
 import com.snapconverter.engine.policy.ImageEncodePlan
+import com.snapconverter.engine.media.CaptureTimestamp
 import com.snapconverter.engine.policy.ImageSourceInfo
 import com.snapconverter.engine.policy.OutputImageCodec
 
@@ -35,11 +36,15 @@ class ImageEngine(
             height = header.size.height
             decoder.setTargetSize(1, 1)
         }
+        val identity = CaptureTimestamp.read(context, uri, context.contentResolver.getType(uri) ?: "image/*")
         return ImageSourceInfo(
             width = width,
             height = height,
             rotation = 0,
-            mime = context.contentResolver.getType(uri) ?: "image/*",
+            mime = identity.mimeType.ifBlank { "image/*" },
+            displayName = identity.displayName,
+            fileSizeBytes = identity.fileSizeBytes,
+            captureTimeMs = identity.captureTimeMs,
         )
     }
 

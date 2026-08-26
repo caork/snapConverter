@@ -33,6 +33,9 @@ data class VideoSourceInfo(
     val mime: String,
     val audioMime: String?,
     val audioBitrateBps: Int,
+    val displayName: String = "",
+    val fileSizeBytes: Long = 0,
+    val captureTimeMs: Long? = null,
 )
 
 data class ImageSourceInfo(
@@ -40,6 +43,9 @@ data class ImageSourceInfo(
     val height: Int,
     val rotation: Int,
     val mime: String,
+    val displayName: String = "",
+    val fileSizeBytes: Long = 0,
+    val captureTimeMs: Long? = null,
 )
 
 data class CompressionRequest(
