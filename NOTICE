@@ -1,0 +1,12 @@
+SnapConverter
+Copyright 2026 SnapConverter contributors
+
+This product includes software developed for hardware-first Android media
+conversion using the public Android MediaCodec, EGL, and OpenGL ES APIs.
+
+Qualcomm vendor parameter names (`vendor.qti-ext-*`) are documented public
+protocol keys from Qualcomm's MediaCodec vendor extensions. SnapConverter is
+not affiliated with Qualcomm Technologies, Inc.
+
+Snapdragon, Adreno, and Qualcomm are trademarks of Qualcomm Incorporated.
+Android is a trademark of Google LLC.
