@@ -4,7 +4,7 @@ import com.snapconverter.engine.media.VideoGeometry
 
 enum class MediaKind { VIDEO, IMAGE }
 
-enum class CompressionMode { QUALITY, TARGET_SIZE, TARGET_BITRATE, LOSSLESS_REMUX }
+enum class CompressionMode { QUALITY, TARGET_SIZE, TARGET_BITRATE, TARGET_SSIM, LOSSLESS_REMUX }
 
 enum class OutputVideoCodec { HEVC, AVC, AV1 }
 
@@ -83,6 +83,7 @@ data class CompressionRequest(
     val qpIMax: Int? = null,
     val qpPMin: Int? = null,
     val qpPMax: Int? = null,
+    val targetSsim: Double = 0.95,
 )
 
 data class VideoEncodePlan(

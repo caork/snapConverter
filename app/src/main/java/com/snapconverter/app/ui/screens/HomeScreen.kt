@@ -78,6 +78,8 @@ import com.snapconverter.engine.policy.OutputImageCodec
 import com.snapconverter.engine.policy.OutputResolution
 import com.snapconverter.engine.policy.OutputVideoCodec
 import com.snapconverter.engine.policy.VideoProfileOption
+import com.snapconverter.engine.quality.ImageMetrics
+import kotlin.math.abs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -305,6 +307,9 @@ private fun SettingsPanel(state: UiState, vm: JobViewModel) {
                 MiniChip("画质", state.mode == CompressionMode.QUALITY, !locked) { vm.setMode(CompressionMode.QUALITY) }
                 MiniChip("目标大小", state.mode == CompressionMode.TARGET_SIZE, !locked) { vm.setMode(CompressionMode.TARGET_SIZE) }
                 MiniChip("码率", state.mode == CompressionMode.TARGET_BITRATE, !locked) { vm.setMode(CompressionMode.TARGET_BITRATE) }
+                MiniChip("目标 SSIM", state.mode == CompressionMode.TARGET_SSIM, !locked) {
+                    vm.setMode(CompressionMode.TARGET_SSIM)
+                }
             }
         } else {
             ChipRow {
@@ -319,7 +324,10 @@ private fun SettingsPanel(state: UiState, vm: JobViewModel) {
             }
         }
 
-        if (state.kind != MediaKind.VIDEO || state.bitrateMode == BitrateModeOption.AUTO) {
+        if (state.kind != MediaKind.VIDEO ||
+            state.bitrateMode == BitrateModeOption.AUTO ||
+            state.mode == CompressionMode.TARGET_SSIM
+        ) {
             when (state.mode) {
                 CompressionMode.QUALITY, CompressionMode.LOSSLESS_REMUX -> {
                     Label("Quality  ${state.quality}")
@@ -336,6 +344,18 @@ private fun SettingsPanel(state: UiState, vm: JobViewModel) {
                     CompactSlider(state.targetBitrateKbps.toFloat(), 200f..20000f, !locked) {
                         vm.setTargetBitrateKbps(it.toInt().coerceIn(200, 40000))
                     }
+                }
+                CompressionMode.TARGET_SSIM -> {
+                    Label("目标 SSIM  ${"%.3f".format(state.targetSsim)}  ${ImageMetrics.ssimLabel(state.targetSsim.toDouble())}")
+                    CompactSlider(state.targetSsim, 0.80f..0.99f, !locked) { vm.setTargetSsim(it) }
+                    ChipRow {
+                        listOf(0.90f, 0.95f, 0.99f).forEach { v ->
+                            MiniChip("%.2f".format(v), abs(state.targetSsim - v) < 0.005f, !locked) {
+                                vm.setTargetSsim(v)
+                            }
+                        }
+                    }
+                    Label("先标定最低码率，再整片编码")
                 }
             }
         }

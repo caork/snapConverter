@@ -53,6 +53,7 @@ data class UiState(
     val quality: Int = 70,
     val targetSizeMb: Int = 200,
     val targetBitrateKbps: Int = 4000,
+    val targetSsim: Float = 0.95f,
     val videoCodec: OutputVideoCodec = OutputVideoCodec.HEVC,
     val imageCodec: OutputImageCodec = OutputImageCodec.HEIC,
     val resolution: OutputResolution = OutputResolution.ORIGINAL,
@@ -181,6 +182,7 @@ class JobViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun setQuality(q: Int) = _state.update { it.copy(quality = q) }
     fun setTargetSizeMb(v: Int) = _state.update { it.copy(targetSizeMb = v) }
+    fun setTargetSsim(v: Float) = _state.update { it.copy(targetSsim = v.coerceIn(0.80f, 0.99f)) }
     fun setTargetBitrateKbps(v: Int) = _state.update {
         val max = maxOf(it.maxBitrateKbps, (v * 1.5).toInt())
         it.copy(targetBitrateKbps = v, maxBitrateKbps = max.coerceAtMost(80_000))
@@ -326,6 +328,7 @@ class JobViewModel(application: Application) : AndroidViewModel(application) {
             qpIMax = snapshot.qpIMax,
             qpPMin = snapshot.qpPMin,
             qpPMax = snapshot.qpPMax,
+            targetSsim = snapshot.targetSsim.toDouble(),
         )
         viewModelScope.launch {
             _state.update {
@@ -425,7 +428,12 @@ class JobViewModel(application: Application) : AndroidViewModel(application) {
         try {
             resolver.openFileDescriptor(out, "w")?.use { pfd ->
                 engine.compress(kind, input, pfd, request) { update ->
-                    _state.update { it.copy(progress = update, message = "正在硬件转码…") }
+                    _state.update {
+                        it.copy(
+                            progress = update,
+                            message = update.message ?: "正在硬件转码…",
+                        )
+                    }
                 }
             } ?: error("无法打开输出文件")
 

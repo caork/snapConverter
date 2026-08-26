@@ -39,6 +39,9 @@ class SurfaceTranscoder(
         encoder: CodecCandidate,
         plan: VideoEncodePlan,
         progress: EncodeProgressListener? = null,
+        rangeStartUs: Long = 0L,
+        rangeEndUs: Long = -1L,
+        copyAudio: Boolean = true,
     ) {
         val extractor = MediaExtractor()
         var decoderCodec: MediaCodec? = null
@@ -50,9 +53,12 @@ class SurfaceTranscoder(
         try {
             extractor.setDataSource(context, input, null)
             val videoTrack = selectTrack(extractor, "video/")
-            val audioTrack = selectTrackOrNull(extractor, "audio/")
+            val audioTrack = if (copyAudio) selectTrackOrNull(extractor, "audio/") else null
             extractor.selectTrack(videoTrack)
             val inputFormat = extractor.getTrackFormat(videoTrack)
+            if (rangeStartUs > 0L) {
+                extractor.seekTo(rangeStartUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+            }
 
             encoderCodec = selector.createByName(encoder)
             val vendorKeys = selector.probeVendorParameters(encoderCodec)
@@ -80,7 +86,8 @@ class SurfaceTranscoder(
             muxer = MediaMuxer(outputPfd.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             muxer.setOrientationHint(0)
 
-            val durationUs = source.durationUs.coerceAtLeast(1L)
+            val clipEndUs = if (rangeEndUs > 0L) rangeEndUs else source.durationUs
+            val durationUs = (clipEndUs - rangeStartUs).coerceAtLeast(1L)
             val minFrameIntervalUs = 1_000_000L / plan.frameRate
             var lastEncodedPts = -minFrameIntervalUs
             val startedAt = SystemClock.elapsedRealtime()
@@ -94,13 +101,14 @@ class SurfaceTranscoder(
                         bytesWritten = bytesWritten,
                         elapsedMs = SystemClock.elapsedRealtime() - startedAt,
                         presentationTimeUs = pts,
+                        message = "正在硬件转码…",
                     ),
                 )
             }
             var videoTrackIndex = -1
             var audioTrackIndex = -1
             var audioExtractor: MediaExtractor? = null
-            if (audioTrack != null) {
+            if (audioTrack != null && copyAudio) {
                 audioExtractor = MediaExtractor()
                 audioExtractor.setDataSource(context, input, null)
                 audioExtractor.selectTrack(audioTrack)
@@ -118,7 +126,9 @@ class SurfaceTranscoder(
                     val inIndex = decoderCodec.dequeueInputBuffer(TIMEOUT_US)
                     if (inIndex >= 0) {
                         val buffer = decoderCodec.getInputBuffer(inIndex)!!
-                        val sample = extractor.readSampleData(buffer, 0)
+                        val sampleTime = extractor.sampleTime
+                        val pastEnd = rangeEndUs > 0L && sampleTime >= rangeEndUs
+                        val sample = if (pastEnd) -1 else extractor.readSampleData(buffer, 0)
                         if (sample < 0) {
                             decoderCodec.queueInputBuffer(
                                 inIndex, 0, 0, 0,
@@ -127,7 +137,7 @@ class SurfaceTranscoder(
                             extractorDone = true
                         } else {
                             decoderCodec.queueInputBuffer(
-                                inIndex, 0, sample, extractor.sampleTime, 0,
+                                inIndex, 0, sample, sampleTime, 0,
                             )
                             extractor.advance()
                         }
@@ -141,20 +151,26 @@ class SurfaceTranscoder(
                         outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> Unit
                         outIndex >= 0 -> {
                             val eos = decoderBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
-                            val render = decoderBufferInfo.size > 0 && !eos
                             val pts = decoderBufferInfo.presentationTimeUs
+                            val beforeRange = pts < rangeStartUs
+                            val afterRange = rangeEndUs > 0L && pts >= rangeEndUs
+                            val render = decoderBufferInfo.size > 0 && !eos && !beforeRange && !afterRange
                             val drop = render && (pts - lastEncodedPts) < (minFrameIntervalUs * 0.85).toLong()
                             decoderCodec.releaseOutputBuffer(outIndex, render && !drop)
                             if (render && !drop) {
+                                val encodePts = (pts - rangeStartUs).coerceAtLeast(0L)
                                 gpu.drawDecoderFrame(
-                                    presentationTimeUs = pts,
+                                    presentationTimeUs = encodePts,
                                     outputWidth = plan.width,
                                     outputHeight = plan.height,
                                     extraRotationDegrees = VideoGeometry.glRotationDegrees(source.rotation),
                                 )
                                 lastEncodedPts = pts
                                 framesEncoded++
-                                emit((pts.toDouble() / durationUs).toFloat().coerceIn(0f, 0.99f), pts)
+                                emit((encodePts.toDouble() / durationUs).toFloat().coerceIn(0f, 0.99f), encodePts)
+                            }
+                            if (afterRange && !eos) {
+                                decoderDone = true
                             }
                             if (eos) {
                                 decoderDone = true

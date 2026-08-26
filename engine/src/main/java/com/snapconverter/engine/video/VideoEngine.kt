@@ -10,16 +10,22 @@ import com.snapconverter.engine.codec.HardwareCodecSelector
 import com.snapconverter.engine.ScLog
 import com.snapconverter.engine.media.CaptureTimestamp
 import com.snapconverter.engine.media.VideoGeometry
+import com.snapconverter.engine.policy.BitrateModeOption
+import com.snapconverter.engine.policy.CompressionMode
 import com.snapconverter.engine.policy.CompressionPolicy
 import com.snapconverter.engine.policy.CompressionRequest
 import com.snapconverter.engine.policy.VideoSourceInfo
+import com.snapconverter.engine.progress.EncodeProgress
 import com.snapconverter.engine.progress.EncodeProgressListener
+import com.snapconverter.engine.quality.QualityAnalyzer
 
 class VideoEngine(
     private val context: Context,
     private val selector: HardwareCodecSelector = HardwareCodecSelector(),
     private val policy: CompressionPolicy = CompressionPolicy(),
 ) {
+    private val quality = QualityAnalyzer(context, selector)
+    private val ssimCalibrator = SsimTargetCalibrator(context, selector, policy, quality)
     fun inspect(uri: Uri): VideoSourceInfo {
         val extractor = MediaExtractor()
         val retriever = MediaMetadataRetriever()
@@ -162,7 +168,34 @@ class VideoEngine(
             width = source.displayWidth,
             height = source.displayHeight,
         )
-        val plan = policy.planVideo(source, request, encoder)
+        val resolved = if (request.mode == CompressionMode.TARGET_SSIM) {
+            val found = ssimCalibrator.calibrate(
+                input, source, decoder, encoder, request, progress,
+            )
+            request.copy(
+                targetBitrateBps = found.bitrateBps,
+                bitrateMode = when (request.bitrateMode) {
+                    BitrateModeOption.AUTO -> BitrateModeOption.VBR
+                    else -> request.bitrateMode
+                },
+                maxBitrateBps = (found.bitrateBps * 1.35).toInt(),
+            )
+        } else {
+            request
+        }
+        val plan = policy.planVideo(source, resolved, encoder)
+        val encodeProgress = if (request.mode == CompressionMode.TARGET_SSIM) {
+            EncodeProgressListener { update ->
+                progress?.onProgress(
+                    update.copy(
+                        ratio = 0.18f + update.ratio * 0.82f,
+                        message = update.message ?: "正在硬件转码…",
+                    ),
+                )
+            }
+        } else {
+            progress
+        }
         SurfaceTranscoder(context, selector).transcode(
             input = input,
             outputPfd = outputPfd,
@@ -170,7 +203,7 @@ class VideoEngine(
             decoder = decoder,
             encoder = encoder,
             plan = plan,
-            progress = progress,
+            progress = encodeProgress,
         )
     }
 }

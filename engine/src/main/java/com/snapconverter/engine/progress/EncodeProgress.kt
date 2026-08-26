@@ -6,6 +6,7 @@ data class EncodeProgress(
     val bytesWritten: Long = 0,
     val elapsedMs: Long = 0,
     val presentationTimeUs: Long = 0,
+    val message: String? = null,
 ) {
     val framesPerSecond: Float
         get() = if (elapsedMs <= 0) 0f else framesEncoded * 1000f / elapsedMs

@@ -30,12 +30,24 @@ class QualityAnalyzer(
         durationUs: Long,
         encodedWidth: Int,
         encodedHeight: Int,
+        origOffsetUs: Long = 0L,
+        sampleCountOverride: Int? = null,
+        includeVmaf: Boolean = true,
     ): QualityReport? {
         return runCatching {
             if (kind == MediaKind.IMAGE) {
                 compareImages(original, encoded, encodedWidth, encodedHeight)
             } else {
-                compareVideo(original, encoded, durationUs, encodedWidth, encodedHeight)
+                compareVideo(
+                    original,
+                    encoded,
+                    durationUs,
+                    encodedWidth,
+                    encodedHeight,
+                    origOffsetUs,
+                    sampleCountOverride,
+                    includeVmaf,
+                )
             }
         }.onFailure { ScLog.w("quality compare failed", it) }.getOrNull()
     }
@@ -58,28 +70,35 @@ class QualityAnalyzer(
         durationUs: Long,
         outW: Int,
         outH: Int,
+        origOffsetUs: Long,
+        sampleCountOverride: Int?,
+        includeVmaf: Boolean,
     ): QualityReport? {
         val duration = durationUs.coerceAtLeast(1L)
         val (cw, ch) = compareSize(outW, outH)
-        val n = sampleCount(duration)
-        val times = LongArray(n) { i ->
+        val n = sampleCountOverride?.coerceIn(1, 16) ?: sampleCount(duration)
+        val encTimes = LongArray(n) { i ->
             if (n == 1) duration / 2 else duration * i / (n - 1)
         }
-        val decoded = scoreDecoded(original, encoded, times, cw, ch)
+        val origTimes = LongArray(n) { encTimes[it] + origOffsetUs }
+        val decoded = scoreDecoded(original, encoded, origTimes, encTimes, origOffsetUs, cw, ch, includeVmaf)
         if (decoded != null) return decoded
         ScLog.w("quality decoder sample empty, using retriever OPTION_CLOSEST")
-        return scoreRetriever(original, encoded, times, cw, ch)
+        return scoreRetriever(original, encoded, origTimes, encTimes, cw, ch)
     }
 
     private fun scoreDecoded(
         original: Uri,
         encoded: Uri,
-        times: LongArray,
+        origTimes: LongArray,
+        encTimes: LongArray,
+        origOffsetUs: Long,
         width: Int,
         height: Int,
+        includeVmaf: Boolean,
     ): QualityReport? {
-        val refs = sampler.sample(original, times, width, height)
-        val dists = sampler.sample(encoded, times, width, height)
+        val refs = sampler.sample(original, origTimes, width, height)
+        val dists = sampler.sample(encoded, encTimes, width, height)
         if (refs.isEmpty() || dists.isEmpty()) return null
         var psnrSum = 0.0
         var ssimSum = 0.0
@@ -89,20 +108,23 @@ class QualityAnalyzer(
         var w = 0
         var h = 0
         for (a in refs) {
-            val b = dists.minByOrNull { abs(it.ptsUs - a.ptsUs) } ?: continue
+            val rel = a.ptsUs - origOffsetUs
+            val b = dists.minByOrNull { abs(it.ptsUs - rel) } ?: continue
             if (a.width != b.width || a.height != b.height) continue
-            if (abs(a.ptsUs - b.ptsUs) > 100_000L) continue
+            if (abs(b.ptsUs - rel) > 100_000L) continue
             psnrSum += ImageMetrics.psnrY(a.yFull, b.yFull)
             ssimSum += ImageMetrics.ssimY(a.yFull, b.yFull, a.width, a.height)
-            refI420 += a.i420Limited
-            distI420 += b.i420Limited
+            if (includeVmaf) {
+                refI420 += a.i420Limited
+                distI420 += b.i420Limited
+            }
             w = a.width
             h = a.height
             counted++
         }
         if (counted == 0) return null
         ScLog.i("quality decoded samples=$counted drift-filtered ${w}x$h")
-        val vmaf = if (refI420.isNotEmpty() && VmafNative.available) {
+        val vmaf = if (includeVmaf && refI420.isNotEmpty() && VmafNative.available) {
             VmafNative.scoreI420(w, h, refI420.toTypedArray(), distI420.toTypedArray())
         } else {
             null
@@ -120,7 +142,8 @@ class QualityAnalyzer(
     private fun scoreRetriever(
         original: Uri,
         encoded: Uri,
-        times: LongArray,
+        origTimes: LongArray,
+        encTimes: LongArray,
         cw: Int,
         ch: Int,
     ): QualityReport? {
@@ -130,9 +153,9 @@ class QualityAnalyzer(
         try {
             orig.setDataSource(appContext, original)
             dist.setDataSource(appContext, encoded)
-            for (t in times) {
-                val a = frameAt(orig, t, cw, ch) ?: continue
-                val b = frameAt(dist, t, cw, ch)
+            for (i in origTimes.indices) {
+                val a = frameAt(orig, origTimes[i], cw, ch) ?: continue
+                val b = frameAt(dist, encTimes[i], cw, ch)
                 if (b == null) {
                     a.recycle()
                     continue

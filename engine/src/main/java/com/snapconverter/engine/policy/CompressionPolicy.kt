@@ -54,7 +54,8 @@ class CompressionPolicy {
                 request.targetBitrateBps ?: qualityBitrate
             BitrateModeOption.CQ -> qualityBitrate
             BitrateModeOption.AUTO -> when (request.mode) {
-                CompressionMode.TARGET_BITRATE -> request.targetBitrateBps ?: qualityBitrate
+                CompressionMode.TARGET_BITRATE, CompressionMode.TARGET_SSIM ->
+                    request.targetBitrateBps ?: qualityBitrate
                 CompressionMode.TARGET_SIZE -> estimatedForSize
                 CompressionMode.LOSSLESS_REMUX -> source.bitrateBps.takeIf { it > 0 } ?: qualityBitrate
                 CompressionMode.QUALITY -> qualityBitrate
