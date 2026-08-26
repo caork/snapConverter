@@ -23,6 +23,12 @@ enum class OutputFps {
     FPS_24,
 }
 
+enum class BitrateModeOption { AUTO, VBR, CBR, CQ }
+
+enum class VideoProfileOption { AUTO, BASELINE, MAIN, HIGH, MAIN10 }
+
+enum class ComplexityOption { AUTO, LOW, HIGH }
+
 data class VideoSourceInfo(
     val width: Int,
     val height: Int,
@@ -58,6 +64,13 @@ data class CompressionRequest(
     val imageCodec: OutputImageCodec = OutputImageCodec.HEIC,
     val resolution: OutputResolution = OutputResolution.ORIGINAL,
     val fps: OutputFps = OutputFps.ORIGINAL,
+    val bitrateMode: BitrateModeOption = BitrateModeOption.AUTO,
+    val iFrameIntervalSec: Int? = null,
+    val maxBFrames: Int? = null,
+    val profile: VideoProfileOption = VideoProfileOption.AUTO,
+    val complexity: ComplexityOption = ComplexityOption.AUTO,
+    val qpMin: Int? = null,
+    val qpMax: Int? = null,
 )
 
 data class VideoEncodePlan(
@@ -72,6 +85,12 @@ data class VideoEncodePlan(
     val maxBFrames: Int,
     val operatingRate: Int,
     val colorFormatSurface: Boolean = true,
+    val profile: Int? = null,
+    val complexity: Int? = null,
+    val qpIMin: Int? = null,
+    val qpIMax: Int? = null,
+    val qpPMin: Int? = null,
+    val qpPMax: Int? = null,
 )
 
 data class ImageEncodePlan(

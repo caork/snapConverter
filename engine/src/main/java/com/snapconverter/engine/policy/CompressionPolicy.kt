@@ -1,5 +1,6 @@
 package com.snapconverter.engine.policy
 
+import android.media.MediaCodecInfo
 import android.media.MediaCodecInfo.EncoderCapabilities
 import com.snapconverter.engine.codec.CodecCandidate
 import com.snapconverter.engine.codec.MimeTypes
@@ -59,19 +60,31 @@ class CompressionPolicy {
             encoder.qualityRange != null &&
             request.mode == CompressionMode.QUALITY
 
-        val bitrateMode = when {
-            cqSupported -> EncoderCapabilities.BITRATE_MODE_CQ
-            encoder.supportsBitrateMode(EncoderCapabilities.BITRATE_MODE_VBR) ->
-                EncoderCapabilities.BITRATE_MODE_VBR
-            encoder.supportsBitrateMode(EncoderCapabilities.BITRATE_MODE_CBR) ->
-                EncoderCapabilities.BITRATE_MODE_CBR
-            else -> EncoderCapabilities.BITRATE_MODE_VBR
+        val bitrateMode = when (request.bitrateMode) {
+            BitrateModeOption.VBR -> EncoderCapabilities.BITRATE_MODE_VBR
+            BitrateModeOption.CBR -> EncoderCapabilities.BITRATE_MODE_CBR
+            BitrateModeOption.CQ -> EncoderCapabilities.BITRATE_MODE_CQ
+            BitrateModeOption.AUTO -> when {
+                cqSupported -> EncoderCapabilities.BITRATE_MODE_CQ
+                encoder.supportsBitrateMode(EncoderCapabilities.BITRATE_MODE_VBR) ->
+                    EncoderCapabilities.BITRATE_MODE_VBR
+                encoder.supportsBitrateMode(EncoderCapabilities.BITRATE_MODE_CBR) ->
+                    EncoderCapabilities.BITRATE_MODE_CBR
+                else -> EncoderCapabilities.BITRATE_MODE_VBR
+            }
         }
 
-        val codecQuality = if (cqSupported) {
+        val useCq = bitrateMode == EncoderCapabilities.BITRATE_MODE_CQ && encoder.qualityRange != null
+        val codecQuality = if (useCq) {
             QualityStrategy.mapToCodecQuality(request.appQuality, encoder.qualityRange!!)
         } else {
             null
+        }
+
+        val complexity = when (request.complexity) {
+            ComplexityOption.AUTO -> encoder.complexityRange?.last
+            ComplexityOption.LOW -> encoder.complexityRange?.first
+            ComplexityOption.HIGH -> encoder.complexityRange?.last
         }
 
         return VideoEncodePlan(
@@ -82,9 +95,17 @@ class CompressionPolicy {
             bitrateBps = bitrate,
             bitrateMode = bitrateMode,
             codecQuality = codecQuality,
-            iFrameIntervalSec = if (request.appQuality >= 85) 2 else 3,
-            maxBFrames = if (mime == MimeTypes.HEVC || mime == MimeTypes.AV1) 1 else 0,
+            iFrameIntervalSec = request.iFrameIntervalSec
+                ?: if (request.appQuality >= 85) 2 else 3,
+            maxBFrames = request.maxBFrames
+                ?: if (mime == MimeTypes.HEVC || mime == MimeTypes.AV1) 1 else 0,
             operatingRate = fps.coerceIn(1, 120),
+            profile = profileFor(request.profile, mime),
+            complexity = complexity,
+            qpIMin = request.qpMin,
+            qpIMax = request.qpMax,
+            qpPMin = request.qpMin,
+            qpPMax = request.qpMax,
         )
     }
 
@@ -141,4 +162,16 @@ class CompressionPolicy {
     }
 
     private fun alignEven(value: Int): Int = (value / 2 * 2).coerceAtLeast(2)
+
+    private fun profileFor(option: VideoProfileOption, mime: String): Int? = when (option) {
+        VideoProfileOption.AUTO -> null
+        VideoProfileOption.BASELINE -> MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline
+        VideoProfileOption.MAIN -> if (mime == MimeTypes.HEVC) {
+            MediaCodecInfo.CodecProfileLevel.HEVCProfileMain
+        } else {
+            MediaCodecInfo.CodecProfileLevel.AVCProfileMain
+        }
+        VideoProfileOption.HIGH -> MediaCodecInfo.CodecProfileLevel.AVCProfileHigh
+        VideoProfileOption.MAIN10 -> MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10
+    }
 }

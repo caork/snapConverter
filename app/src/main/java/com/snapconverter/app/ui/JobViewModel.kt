@@ -12,6 +12,8 @@ import com.snapconverter.app.SnapConverterApp
 import com.snapconverter.engine.device.DeviceCapabilityReport
 import com.snapconverter.engine.media.CaptureTimestamp
 import com.snapconverter.engine.media.Mp4TimestampPatcher
+import com.snapconverter.engine.policy.BitrateModeOption
+import com.snapconverter.engine.policy.ComplexityOption
 import com.snapconverter.engine.policy.CompressionMode
 import com.snapconverter.engine.policy.CompressionRequest
 import com.snapconverter.engine.policy.ImageSourceInfo
@@ -20,6 +22,7 @@ import com.snapconverter.engine.policy.OutputFps
 import com.snapconverter.engine.policy.OutputImageCodec
 import com.snapconverter.engine.policy.OutputResolution
 import com.snapconverter.engine.policy.OutputVideoCodec
+import com.snapconverter.engine.policy.VideoProfileOption
 import com.snapconverter.engine.policy.VideoSourceInfo
 import com.snapconverter.engine.progress.EncodeProgress
 import kotlinx.coroutines.Dispatchers
@@ -51,6 +54,14 @@ data class UiState(
     val resolution: OutputResolution = OutputResolution.ORIGINAL,
     val fps: OutputFps = OutputFps.ORIGINAL,
     val preserveCaptureTime: Boolean = true,
+    val advancedOpen: Boolean = false,
+    val bitrateMode: BitrateModeOption = BitrateModeOption.AUTO,
+    val iFrameIntervalSec: Int? = null,
+    val maxBFrames: Int? = null,
+    val profile: VideoProfileOption = VideoProfileOption.AUTO,
+    val complexity: ComplexityOption = ComplexityOption.AUTO,
+    val qpMin: Int? = null,
+    val qpMax: Int? = null,
     val progress: EncodeProgress = EncodeProgress(0f),
     val message: String? = null,
     val outputUri: Uri? = null,
@@ -161,6 +172,13 @@ class JobViewModel(application: Application) : AndroidViewModel(application) {
     fun setResolution(r: OutputResolution) = _state.update { it.copy(resolution = r) }
     fun setFps(f: OutputFps) = _state.update { it.copy(fps = f) }
     fun setPreserveCaptureTime(v: Boolean) = _state.update { it.copy(preserveCaptureTime = v) }
+    fun setAdvancedOpen(v: Boolean) = _state.update { it.copy(advancedOpen = v) }
+    fun setBitrateMode(v: BitrateModeOption) = _state.update { it.copy(bitrateMode = v) }
+    fun setIFrameIntervalSec(v: Int?) = _state.update { it.copy(iFrameIntervalSec = v) }
+    fun setMaxBFrames(v: Int?) = _state.update { it.copy(maxBFrames = v) }
+    fun setProfile(v: VideoProfileOption) = _state.update { it.copy(profile = v) }
+    fun setComplexity(v: ComplexityOption) = _state.update { it.copy(complexity = v) }
+    fun setQpRange(min: Int?, max: Int?) = _state.update { it.copy(qpMin = min, qpMax = max) }
     fun clearError() = _state.update { it.copy(error = null) }
 
     fun start() {
@@ -186,6 +204,13 @@ class JobViewModel(application: Application) : AndroidViewModel(application) {
             imageCodec = snapshot.imageCodec,
             resolution = snapshot.resolution,
             fps = snapshot.fps,
+            bitrateMode = snapshot.bitrateMode,
+            iFrameIntervalSec = snapshot.iFrameIntervalSec,
+            maxBFrames = snapshot.maxBFrames,
+            profile = snapshot.profile,
+            complexity = snapshot.complexity,
+            qpMin = snapshot.qpMin,
+            qpMax = snapshot.qpMax,
         )
         viewModelScope.launch {
             _state.update {

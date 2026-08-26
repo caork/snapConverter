@@ -8,8 +8,10 @@ import android.net.Uri
 import android.util.Size
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,14 +31,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.Photo
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -55,26 +57,32 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.snapconverter.app.R
 import com.snapconverter.app.ui.ConvertStage
 import com.snapconverter.app.ui.JobViewModel
 import com.snapconverter.app.ui.UiState
+import com.snapconverter.engine.policy.BitrateModeOption
+import com.snapconverter.engine.policy.ComplexityOption
 import com.snapconverter.engine.policy.CompressionMode
 import com.snapconverter.engine.policy.MediaKind
 import com.snapconverter.engine.policy.OutputFps
 import com.snapconverter.engine.policy.OutputImageCodec
 import com.snapconverter.engine.policy.OutputResolution
 import com.snapconverter.engine.policy.OutputVideoCodec
+import com.snapconverter.engine.policy.VideoProfileOption
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private val CardShape = RoundedCornerShape(20.dp)
-private val ThumbShape = RoundedCornerShape(16.dp)
+private val CardShape = RoundedCornerShape(14.dp)
+private val ThumbShape = RoundedCornerShape(10.dp)
 
 @Composable
 fun HomeScreen(viewModel: JobViewModel) {
@@ -91,104 +99,69 @@ fun HomeScreen(viewModel: JobViewModel) {
                 .statusBarsPadding()
                 .navigationBarsPadding()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Header(state)
-            DeviceStrip(state)
+            HeaderBar(qualcomm = state.capabilities?.hasQualcommEncoder == true)
             when (state.stage) {
                 ConvertStage.IDLE, ConvertStage.LOADING -> IdleCard(
                     loading = state.stage == ConvertStage.LOADING,
                     onPick = { picker.launch(arrayOf("video/*", "image/*")) },
                 )
                 ConvertStage.READY, ConvertStage.RUNNING, ConvertStage.DONE -> {
-                    MediaHero(state, onChange = { viewModel.reset(); picker.launch(arrayOf("video/*", "image/*")) })
+                    MediaHero(
+                        state,
+                        onChange = {
+                            viewModel.reset()
+                            picker.launch(arrayOf("video/*", "image/*"))
+                        },
+                    )
                     if (state.stage != ConvertStage.DONE) {
                         SettingsPanel(state, viewModel)
                     }
-                    if (state.stage == ConvertStage.RUNNING) {
-                        ProgressCard(state)
-                    }
+                    if (state.stage == ConvertStage.RUNNING) ProgressCard(state)
                     if (state.stage == ConvertStage.DONE) {
                         ResultCard(state, onReset = { viewModel.reset() })
                     }
                 }
             }
-            state.error?.let {
-                Text(it, color = MaterialTheme.colorScheme.error)
-            }
+            state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
             if (state.stage == ConvertStage.READY) {
                 Button(
                     onClick = { viewModel.start() },
                     enabled = state.capabilities?.v1Supported == true,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(52.dp),
-                    shape = RoundedCornerShape(16.dp),
+                        .height(44.dp),
+                    shape = RoundedCornerShape(12.dp),
                 ) {
                     Text("开始转换", fontWeight = FontWeight.SemiBold)
                 }
             }
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(12.dp))
         }
     }
 }
 
 @Composable
-private fun Header(state: UiState) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("SnapConverter", style = MaterialTheme.typography.headlineLarge)
-        Text(
-            when (state.stage) {
-                ConvertStage.IDLE -> "打开或分享照片、视频，用高通硬件转码"
-                ConvertStage.LOADING -> "正在读取媒体信息…"
-                ConvertStage.READY -> "选好目标格式和参数，再开始转换"
-                ConvertStage.RUNNING -> "硬件编码器工作中"
-                ConvertStage.DONE -> "转换完成，拍摄时间默认保持不变"
-            },
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-@Composable
-private fun DeviceStrip(state: UiState) {
-    val caps = state.capabilities ?: return
-    val ok = caps.v1Supported
+private fun HeaderBar(qualcomm: Boolean) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(CardShape)
-            .background(MaterialTheme.colorScheme.surface)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+        modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            modifier = Modifier
-                .size(8.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(
-                    if (ok) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.error,
-                ),
+        Text(
+            "SnapConverter",
+            fontSize = 18.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = (-0.2).sp,
         )
-        Spacer(Modifier.width(10.dp))
-        Column {
-            Text(
-                if (ok) "高通硬件就绪" else "未检测到高通硬件编码器",
-                style = MaterialTheme.typography.titleMedium,
-                color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-            )
-            Text(
-                buildList {
-                    add(caps.socModel.ifBlank { caps.hardware })
-                    if (caps.hardwareHevcEncoder) add("HEVC")
-                    if (caps.hardwareAvcEncoder) add("AVC")
-                    if (caps.hardwareAv1Encoder) add("AV1")
-                }.joinToString(" · "),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+        Spacer(Modifier.weight(1f))
+        if (qualcomm) {
+            Icon(
+                painter = painterResource(R.drawable.ic_qti),
+                contentDescription = "Qualcomm",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(16.dp),
             )
         }
     }
@@ -196,98 +169,90 @@ private fun DeviceStrip(state: UiState) {
 
 @Composable
 private fun IdleCard(loading: Boolean, onPick: () -> Unit) {
-    Column(
+    Button(
+        onClick = onPick,
+        enabled = !loading,
         modifier = Modifier
             .fillMaxWidth()
-            .clip(CardShape)
-            .background(MaterialTheme.colorScheme.surface)
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-        horizontalAlignment = Alignment.Start,
+            .height(44.dp),
+        shape = RoundedCornerShape(12.dp),
     ) {
-        Icon(
-            imageVector = Icons.Rounded.Movie,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(36.dp),
-        )
-        Text("打开媒体", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "从相册选择，或在其他 App 里点分享 / 打开方式，选 SnapConverter。加载后会显示预览、拍摄时间和可转格式。",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Button(
-            onClick = onPick,
-            enabled = !loading,
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(14.dp),
-        ) {
-            Text(if (loading) "读取中…" else "选择照片或视频")
-        }
+        Text(if (loading) "读取中…" else "选择照片或视频")
     }
 }
 
 @Composable
 private fun MediaHero(state: UiState, onChange: () -> Unit) {
     val uri = state.input
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(CardShape)
             .background(MaterialTheme.colorScheme.surface)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         if (uri != null) {
-            MediaThumb(uri)
+            MediaThumb(uri, Modifier.size(72.dp))
         }
-        Text(state.displayName, style = MaterialTheme.typography.titleMedium)
-        Text(
-            buildString {
-                val video = state.videoInfo
-                val image = state.imageInfo
-                if (video != null) {
-                    append("${video.width}×${video.height}")
-                    append("  ·  ${formatDuration(video.durationUs)}")
-                    append("  ·  ${formatSize(state.fileSizeBytes)}")
-                } else if (image != null) {
-                    append("${image.width}×${image.height}")
-                    append("  ·  ${formatSize(state.fileSizeBytes)}")
-                }
-            },
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                Icons.Outlined.Schedule,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(Modifier.width(6.dp))
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    state.displayName,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    "更换",
+                    fontSize = 12.sp,
+                    color = if (state.stage == ConvertStage.RUNNING) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                    modifier = Modifier.clickable(
+                        enabled = state.stage != ConvertStage.RUNNING,
+                        onClick = onChange,
+                    ),
+                )
+            }
             Text(
-                state.captureTimeMs?.let { "拍摄 ${formatCapture(it)}" } ?: "未读到拍摄时间",
+                buildString {
+                    val video = state.videoInfo
+                    val image = state.imageInfo
+                    if (video != null) {
+                        append("${video.width}×${video.height}")
+                        append(" · ${formatDuration(video.durationUs)}")
+                        append(" · ${formatSize(state.fileSizeBytes)}")
+                    } else if (image != null) {
+                        append("${image.width}×${image.height}")
+                        append(" · ${formatSize(state.fileSizeBytes)}")
+                    }
+                },
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
             )
-        }
-        TextButton(onClick = onChange, enabled = state.stage != ConvertStage.RUNNING) {
-            Text("换一个文件")
+            Text(
+                state.captureTimeMs?.let { formatCapture(it) } ?: "无拍摄时间",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
+            )
         }
     }
 }
 
 @Composable
-private fun MediaThumb(uri: Uri) {
+private fun MediaThumb(uri: Uri, modifier: Modifier) {
     val context = LocalContext.current
     val bitmap by produceState<Bitmap?>(initialValue = null, uri) {
         value = withContext(Dispatchers.IO) {
-            runCatching { context.contentResolver.loadThumbnail(uri, Size(960, 540), null) }.getOrNull()
+            runCatching { context.contentResolver.loadThumbnail(uri, Size(320, 320), null) }.getOrNull()
         }
     }
     Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(180.dp)
+        modifier = modifier
             .clip(ThumbShape)
             .background(MaterialTheme.colorScheme.background),
         contentAlignment = Alignment.Center,
@@ -301,11 +266,7 @@ private fun MediaThumb(uri: Uri) {
                 contentScale = ContentScale.Crop,
             )
         } else {
-            Icon(
-                Icons.Rounded.Photo,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Icon(Icons.Rounded.Photo, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -319,166 +280,225 @@ private fun SettingsPanel(state: UiState, vm: JobViewModel) {
             .fillMaxWidth()
             .clip(CardShape)
             .background(MaterialTheme.colorScheme.surface)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Text("目标格式", style = MaterialTheme.typography.titleMedium)
         if (state.kind == MediaKind.VIDEO) {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(
-                    selected = state.videoCodec == OutputVideoCodec.HEVC,
-                    onClick = { vm.setVideoCodec(OutputVideoCodec.HEVC) },
-                    enabled = !locked && state.capabilities?.hardwareHevcEncoder == true,
-                    label = { Text("H.265 / HEVC") },
-                )
-                FilterChip(
-                    selected = state.videoCodec == OutputVideoCodec.AVC,
-                    onClick = { vm.setVideoCodec(OutputVideoCodec.AVC) },
-                    enabled = !locked && state.capabilities?.hardwareAvcEncoder == true,
-                    label = { Text("H.264 / AVC") },
-                )
+            ChipRow {
+                MiniChip("H.265", state.videoCodec == OutputVideoCodec.HEVC, !locked && state.capabilities?.hardwareHevcEncoder == true) {
+                    vm.setVideoCodec(OutputVideoCodec.HEVC)
+                }
+                MiniChip("H.264", state.videoCodec == OutputVideoCodec.AVC, !locked && state.capabilities?.hardwareAvcEncoder == true) {
+                    vm.setVideoCodec(OutputVideoCodec.AVC)
+                }
                 if (state.capabilities?.hardwareAv1Encoder == true) {
-                    FilterChip(
-                        selected = state.videoCodec == OutputVideoCodec.AV1,
-                        onClick = { vm.setVideoCodec(OutputVideoCodec.AV1) },
-                        enabled = !locked,
-                        label = { Text("AV1") },
-                    )
+                    MiniChip("AV1", state.videoCodec == OutputVideoCodec.AV1, !locked) {
+                        vm.setVideoCodec(OutputVideoCodec.AV1)
+                    }
                 }
             }
-            Text("压缩方式", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(
-                    selected = state.mode == CompressionMode.QUALITY,
-                    onClick = { vm.setMode(CompressionMode.QUALITY) },
-                    enabled = !locked,
-                    label = { Text("画质") },
-                )
-                FilterChip(
-                    selected = state.mode == CompressionMode.TARGET_SIZE,
-                    onClick = { vm.setMode(CompressionMode.TARGET_SIZE) },
-                    enabled = !locked,
-                    label = { Text("目标大小") },
-                )
-                FilterChip(
-                    selected = state.mode == CompressionMode.TARGET_BITRATE,
-                    onClick = { vm.setMode(CompressionMode.TARGET_BITRATE) },
-                    enabled = !locked,
-                    label = { Text("码率") },
-                )
+            ChipRow {
+                MiniChip("画质", state.mode == CompressionMode.QUALITY, !locked) { vm.setMode(CompressionMode.QUALITY) }
+                MiniChip("目标大小", state.mode == CompressionMode.TARGET_SIZE, !locked) { vm.setMode(CompressionMode.TARGET_SIZE) }
+                MiniChip("码率", state.mode == CompressionMode.TARGET_BITRATE, !locked) { vm.setMode(CompressionMode.TARGET_BITRATE) }
             }
         } else {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(
-                    selected = state.imageCodec == OutputImageCodec.HEIC,
-                    onClick = { vm.setImageCodec(OutputImageCodec.HEIC) },
-                    enabled = !locked,
-                    label = { Text("HEIC") },
-                )
-                FilterChip(
-                    selected = state.imageCodec == OutputImageCodec.JPEG,
-                    onClick = { vm.setImageCodec(OutputImageCodec.JPEG) },
-                    enabled = !locked && state.capabilities?.hardwareJpegEncoder == true,
-                    label = { Text("JPEG") },
-                )
-            }
-            if (state.capabilities?.hardwareJpegEncoder != true) {
-                Text(
-                    "这台设备没有公开 JPEG 硬件编码器，图片请用 HEIC。",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            ChipRow {
+                MiniChip("HEIC", state.imageCodec == OutputImageCodec.HEIC, !locked) {
+                    vm.setImageCodec(OutputImageCodec.HEIC)
+                }
+                MiniChip(
+                    "JPEG",
+                    state.imageCodec == OutputImageCodec.JPEG,
+                    !locked && state.capabilities?.hardwareJpegEncoder == true,
+                ) { vm.setImageCodec(OutputImageCodec.JPEG) }
             }
         }
 
         when (state.mode) {
             CompressionMode.QUALITY, CompressionMode.LOSSLESS_REMUX -> {
-                Text("画质 ${state.quality}    更小文件 ← → 更高画质")
-                Slider(
-                    value = state.quality.toFloat(),
-                    onValueChange = { vm.setQuality(it.toInt()) },
-                    valueRange = 0f..100f,
-                    enabled = !locked,
-                )
+                Label("Quality  ${state.quality}")
+                CompactSlider(state.quality.toFloat(), 0f..100f, !locked) { vm.setQuality(it.toInt()) }
             }
             CompressionMode.TARGET_SIZE -> {
-                Text("目标体积  ${state.targetSizeMb} MB")
-                Slider(
-                    value = state.targetSizeMb.toFloat(),
-                    onValueChange = { vm.setTargetSizeMb(it.toInt().coerceIn(8, 2048)) },
-                    valueRange = 8f..1024f,
-                    enabled = !locked,
-                )
+                Label("Target size  ${state.targetSizeMb} MB")
+                CompactSlider(state.targetSizeMb.toFloat(), 8f..1024f, !locked) {
+                    vm.setTargetSizeMb(it.toInt().coerceIn(8, 2048))
+                }
             }
             CompressionMode.TARGET_BITRATE -> {
-                Text("视频码率  ${state.targetBitrateKbps} kbps")
-                Slider(
-                    value = state.targetBitrateKbps.toFloat(),
-                    onValueChange = { vm.setTargetBitrateKbps(it.toInt().coerceIn(200, 40000)) },
-                    valueRange = 200f..20000f,
-                    enabled = !locked,
-                )
+                Label("Bitrate  ${state.targetBitrateKbps} kbps")
+                CompactSlider(state.targetBitrateKbps.toFloat(), 200f..20000f, !locked) {
+                    vm.setTargetBitrateKbps(it.toInt().coerceIn(200, 40000))
+                }
             }
         }
 
-        Text("分辨率", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Label("Resolution")
+        ChipRow {
             listOf(
                 OutputResolution.ORIGINAL to "原始",
                 OutputResolution.UHD_2160 to "2160p",
                 OutputResolution.QHD_1440 to "1440p",
                 OutputResolution.FHD_1080 to "1080p",
                 OutputResolution.HD_720 to "720p",
-            ).forEach { (value, label) ->
-                FilterChip(
-                    selected = state.resolution == value,
-                    onClick = { vm.setResolution(value) },
-                    enabled = !locked,
-                    label = { Text(label) },
-                )
+            ).forEach { (v, t) ->
+                MiniChip(t, state.resolution == v, !locked) { vm.setResolution(v) }
             }
         }
         if (state.kind == MediaKind.VIDEO) {
-            Text("帧率", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Label("Frame rate")
+            ChipRow {
                 listOf(
                     OutputFps.ORIGINAL to "原始",
                     OutputFps.FPS_60 to "60",
                     OutputFps.FPS_30 to "30",
                     OutputFps.FPS_24 to "24",
-                ).forEach { (value, label) ->
-                    FilterChip(
-                        selected = state.fps == value,
-                        onClick = { vm.setFps(value) },
-                        enabled = !locked,
-                        label = { Text(label) },
-                    )
+                ).forEach { (v, t) ->
+                    MiniChip(t, state.fps == v, !locked) { vm.setFps(v) }
                 }
             }
         }
 
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("保留原来的拍摄时间", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "相册和文件里仍显示原拍摄日期，不会变成今天。",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("保留拍摄时间", fontSize = 13.sp, modifier = Modifier.weight(1f))
             Switch(
                 checked = state.preserveCaptureTime,
                 onCheckedChange = { vm.setPreserveCaptureTime(it) },
                 enabled = !locked,
             )
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Outlined.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(6.dp))
-            Text(
-                if (state.kind == MediaKind.VIDEO) "保存到  影片/SnapConverter" else "保存到  图片/SnapConverter",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        Text(
+            if (state.kind == MediaKind.VIDEO) "影片/SnapConverter" else "图片/SnapConverter",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 11.sp,
+        )
+
+        if (state.kind == MediaKind.VIDEO) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = !locked) { vm.setAdvancedOpen(!state.advancedOpen) }
+                    .padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("高级参数", fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                Icon(
+                    if (state.advancedOpen) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            AnimatedVisibility(visible = state.advancedOpen) {
+                AdvancedParams(state, vm, locked)
+            }
         }
     }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AdvancedParams(state: UiState, vm: JobViewModel, locked: Boolean) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Label("Bitrate mode")
+        ChipRow {
+            MiniChip("Auto", state.bitrateMode == BitrateModeOption.AUTO, !locked) { vm.setBitrateMode(BitrateModeOption.AUTO) }
+            MiniChip("VBR", state.bitrateMode == BitrateModeOption.VBR, !locked) { vm.setBitrateMode(BitrateModeOption.VBR) }
+            MiniChip("CBR", state.bitrateMode == BitrateModeOption.CBR, !locked) { vm.setBitrateMode(BitrateModeOption.CBR) }
+            MiniChip("CQ", state.bitrateMode == BitrateModeOption.CQ, !locked) { vm.setBitrateMode(BitrateModeOption.CQ) }
+        }
+        Label("I-frame interval")
+        ChipRow {
+            MiniChip("Auto", state.iFrameIntervalSec == null, !locked) { vm.setIFrameIntervalSec(null) }
+            listOf(1, 2, 3, 5, 10).forEach { s ->
+                MiniChip("${s}s", state.iFrameIntervalSec == s, !locked) { vm.setIFrameIntervalSec(s) }
+            }
+        }
+        Label("B-frames")
+        ChipRow {
+            MiniChip("Auto", state.maxBFrames == null, !locked) { vm.setMaxBFrames(null) }
+            listOf(0, 1, 2, 3).forEach { n ->
+                MiniChip("$n", state.maxBFrames == n, !locked) { vm.setMaxBFrames(n) }
+            }
+        }
+        Label("Profile")
+        ChipRow {
+            MiniChip("Auto", state.profile == VideoProfileOption.AUTO, !locked) { vm.setProfile(VideoProfileOption.AUTO) }
+            if (state.videoCodec == OutputVideoCodec.AVC) {
+                MiniChip("Baseline", state.profile == VideoProfileOption.BASELINE, !locked) { vm.setProfile(VideoProfileOption.BASELINE) }
+                MiniChip("Main", state.profile == VideoProfileOption.MAIN, !locked) { vm.setProfile(VideoProfileOption.MAIN) }
+                MiniChip("High", state.profile == VideoProfileOption.HIGH, !locked) { vm.setProfile(VideoProfileOption.HIGH) }
+            } else {
+                MiniChip("Main", state.profile == VideoProfileOption.MAIN, !locked) { vm.setProfile(VideoProfileOption.MAIN) }
+                MiniChip("Main10", state.profile == VideoProfileOption.MAIN10, !locked) { vm.setProfile(VideoProfileOption.MAIN10) }
+            }
+        }
+        Label("Complexity")
+        ChipRow {
+            MiniChip("Auto", state.complexity == ComplexityOption.AUTO, !locked) { vm.setComplexity(ComplexityOption.AUTO) }
+            MiniChip("Low", state.complexity == ComplexityOption.LOW, !locked) { vm.setComplexity(ComplexityOption.LOW) }
+            MiniChip("High", state.complexity == ComplexityOption.HIGH, !locked) { vm.setComplexity(ComplexityOption.HIGH) }
+        }
+        Label("QP")
+        ChipRow {
+            MiniChip("Auto", state.qpMin == null, !locked) { vm.setQpRange(null, null) }
+            MiniChip("Custom", state.qpMin != null, !locked) {
+                if (state.qpMin == null) vm.setQpRange(16, 36)
+            }
+        }
+        if (state.qpMin != null && state.qpMax != null) {
+            Label("QP min  ${state.qpMin}")
+            CompactSlider(state.qpMin.toFloat(), 1f..51f, !locked) { min ->
+                vm.setQpRange(min.toInt(), maxOf(min.toInt(), state.qpMax ?: min.toInt()))
+            }
+            Label("QP max  ${state.qpMax}")
+            CompactSlider(state.qpMax.toFloat(), 1f..51f, !locked) { max ->
+                vm.setQpRange(minOf(state.qpMin ?: max.toInt(), max.toInt()), max.toInt())
+            }
+        }
+    }
+}
+
+@Composable
+private fun Label(text: String) {
+    Text(text, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ChipRow(content: @Composable () -> Unit) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(0.dp),
+        content = { content() },
+    )
+}
+
+@Composable
+private fun MiniChip(label: String, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        enabled = enabled,
+        label = { Text(label, fontSize = 12.sp) },
+        colors = FilterChipDefaults.filterChipColors(),
+        border = FilterChipDefaults.filterChipBorder(enabled, selected),
+        modifier = Modifier.height(28.dp),
+    )
+}
+
+@Composable
+private fun CompactSlider(value: Float, range: ClosedFloatingPointRange<Float>, enabled: Boolean, onChange: (Float) -> Unit) {
+    Slider(
+        value = value,
+        onValueChange = onChange,
+        valueRange = range,
+        enabled = enabled,
+        modifier = Modifier.height(20.dp),
+    )
 }
 
 @Composable
@@ -489,31 +509,31 @@ private fun ProgressCard(state: UiState) {
             .fillMaxWidth()
             .clip(CardShape)
             .background(MaterialTheme.colorScheme.surface)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Text("转换进度  ${(p.ratio * 100).toInt()}%", style = MaterialTheme.typography.titleMedium)
+        Text("${(p.ratio * 100).toInt()}%", fontSize = 13.sp, fontWeight = FontWeight.Medium)
         LinearProgressIndicator(
             progress = { p.ratio.coerceIn(0f, 1f) },
             modifier = Modifier.fillMaxWidth(),
         )
-        val speed = buildString {
-            if (p.elapsedMs > 400 && p.framesEncoded > 0) {
-                append("%.0f fps".format(p.framesPerSecond))
-                append("  ·  ")
-            }
-            if (p.elapsedMs > 400 && p.bytesWritten > 0) {
-                append("%.1f MB/s".format(p.megabytesPerSecond))
-            } else {
-                append(state.message ?: "启动中")
-            }
-            val eta = p.etaMs
-            if (eta > 0) {
-                append("  ·  还剩 ")
-                append(formatEta(eta))
-            }
-        }
-        Text(speed, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            buildString {
+                if (p.elapsedMs > 400 && p.framesEncoded > 0) append("%.0f fps".format(p.framesPerSecond))
+                if (p.elapsedMs > 400 && p.bytesWritten > 0) {
+                    if (isNotEmpty()) append(" · ")
+                    append("%.1f MB/s".format(p.megabytesPerSecond))
+                }
+                val eta = p.etaMs
+                if (eta > 0) {
+                    if (isNotEmpty()) append(" · ")
+                    append("ETA ${formatEta(eta)}")
+                }
+                if (isEmpty()) append(state.message ?: "…")
+            },
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -525,50 +545,36 @@ private fun ResultCard(state: UiState, onReset: () -> Unit) {
             .fillMaxWidth()
             .clip(CardShape)
             .background(MaterialTheme.colorScheme.surface)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                Icons.Rounded.CheckCircle,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-            )
-            Spacer(Modifier.width(8.dp))
-            Text("已保存", style = MaterialTheme.typography.titleMedium)
+            Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("已保存", fontSize = 14.sp, fontWeight = FontWeight.Medium)
         }
         Text(
             "${state.outputFolder.orEmpty()}/${state.outputName.orEmpty()}",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 12.sp,
         )
         Text(
             buildString {
                 append(formatSize(state.outputSizeBytes))
-                if (state.fileSizeBytes > 0 && state.outputSizeBytes > 0) {
-                    append("  ·  原来 ")
-                    append(formatSize(state.fileSizeBytes))
+                if (state.fileSizeBytes > 0) {
+                    append(" · 原 ${formatSize(state.fileSizeBytes)}")
                 }
             },
+            fontSize = 12.sp,
         )
-        Text(
-            if (state.preserveCaptureTime && state.captureTimeMs != null) {
-                "拍摄时间 ${formatCapture(state.captureTimeMs)}  ·  未改"
-            } else if (state.preserveCaptureTime) {
-                "未读到原拍摄时间，已尽量不改文件日期"
-            } else {
-                "已按当前时间写入"
-            },
-            color = MaterialTheme.colorScheme.primary,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedButton(
-                onClick = { state.outputUri?.let { openOutput(context, it, state.kind) } },
-            ) { Text("打开") }
-            OutlinedButton(
-                onClick = { state.outputUri?.let { shareOutput(context, it, state.kind) } },
-            ) {
-                Icon(Icons.Outlined.Share, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
+        if (state.preserveCaptureTime && state.captureTimeMs != null) {
+            Text("拍摄时间 ${formatCapture(state.captureTimeMs)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(onClick = { state.outputUri?.let { openOutput(context, it, state.kind) } }) { Text("打开") }
+            OutlinedButton(onClick = { state.outputUri?.let { shareOutput(context, it, state.kind) } }) {
+                Icon(Icons.Outlined.Share, contentDescription = null, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(4.dp))
                 Text("分享")
             }
             TextButton(onClick = onReset) { Text("再转一个") }
@@ -600,9 +606,9 @@ private fun formatCapture(ms: Long): String =
     SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(ms))
 
 private fun formatDuration(durationUs: Long): String {
-    val sec = (durationUs / 1_000_000.0)
-    return if (sec < 60) "%.1f 秒".format(Locale.US, sec)
-    else "%d 分 %02d 秒".format(Locale.US, (sec / 60).toInt(), (sec % 60).toInt())
+    val sec = durationUs / 1_000_000.0
+    return if (sec < 60) "%.1fs".format(Locale.US, sec)
+    else "%d:%02d".format(Locale.US, (sec / 60).toInt(), (sec % 60).toInt())
 }
 
 private fun formatSize(bytes: Long): String {
@@ -619,5 +625,5 @@ private fun formatSize(bytes: Long): String {
 
 private fun formatEta(ms: Long): String {
     val sec = (ms / 1000.0).toInt().coerceAtLeast(1)
-    return if (sec < 60) "${sec}s" else "${sec / 60} 分 ${sec % 60} 秒"
+    return if (sec < 60) "${sec}s" else "${sec / 60}m${sec % 60}s"
 }

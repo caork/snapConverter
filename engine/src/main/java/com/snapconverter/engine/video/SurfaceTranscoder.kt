@@ -230,11 +230,16 @@ class SurfaceTranscoder(
         if (plan.codecQuality != null) {
             format.setInteger(MediaFormat.KEY_QUALITY, plan.codecQuality)
         }
-        if (plan.maxBFrames > 0 && Build.VERSION.SDK_INT >= 29) {
-            format.setInteger(MediaFormat.KEY_MAX_B_FRAMES, plan.maxBFrames)
+        if (Build.VERSION.SDK_INT >= 29) {
+            format.setInteger(MediaFormat.KEY_MAX_B_FRAMES, plan.maxBFrames.coerceAtLeast(0))
         }
-        encoder.complexityRange?.let { range ->
-            format.setInteger(MediaFormat.KEY_COMPLEXITY, range.last)
+        plan.complexity?.let { format.setInteger(MediaFormat.KEY_COMPLEXITY, it) }
+        plan.profile?.let { format.setInteger(MediaFormat.KEY_PROFILE, it) }
+        if (Build.VERSION.SDK_INT >= 31) {
+            plan.qpIMin?.let { format.setInteger(MediaFormat.KEY_VIDEO_QP_I_MIN, it) }
+            plan.qpIMax?.let { format.setInteger(MediaFormat.KEY_VIDEO_QP_I_MAX, it) }
+            plan.qpPMin?.let { format.setInteger(MediaFormat.KEY_VIDEO_QP_P_MIN, it) }
+            plan.qpPMax?.let { format.setInteger(MediaFormat.KEY_VIDEO_QP_P_MAX, it) }
         }
         return format
     }
