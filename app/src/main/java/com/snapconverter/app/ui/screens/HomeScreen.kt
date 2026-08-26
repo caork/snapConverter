@@ -571,6 +571,7 @@ private fun ResultCard(state: UiState, onReset: () -> Unit) {
         if (state.preserveCaptureTime && state.captureTimeMs != null) {
             Text("拍摄时间 ${formatCapture(state.captureTimeMs)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
         }
+        QualityBlock(state)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedButton(onClick = { state.outputUri?.let { openOutput(context, it, state.kind) } }) { Text("打开") }
             OutlinedButton(onClick = { state.outputUri?.let { shareOutput(context, it, state.kind) } }) {
@@ -579,6 +580,30 @@ private fun ResultCard(state: UiState, onReset: () -> Unit) {
                 Text("分享")
             }
             TextButton(onClick = onReset) { Text("再转一个") }
+        }
+    }
+}
+
+@Composable
+private fun QualityBlock(state: UiState) {
+    when {
+        state.qualityRunning -> Text("对比原片：PSNR / SSIM…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        state.qualityReport != null -> {
+            val q = state.qualityReport
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("相对原片", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("PSNR-Y  ${"%.1f".format(q.psnrY)} dB  ${q.psnrLabel}", fontSize = 12.sp)
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("SSIM    ${"%.3f".format(q.ssim)}  ${q.ssimLabel}", fontSize = 12.sp)
+                }
+                Text(
+                    "${q.samples} 帧 · ${q.compareWidth}×${q.compareHeight}",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

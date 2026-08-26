@@ -13,6 +13,8 @@ import com.snapconverter.engine.policy.MediaKind
 import com.snapconverter.engine.policy.VideoSourceInfo
 import com.snapconverter.engine.progress.EncodeProgress
 import com.snapconverter.engine.progress.EncodeProgressListener
+import com.snapconverter.engine.quality.QualityAnalyzer
+import com.snapconverter.engine.quality.QualityReport
 import com.snapconverter.engine.video.VideoEngine
 
 /**
@@ -26,6 +28,7 @@ class CompressionEngine(
     private val probe = DeviceCapabilityProbe()
     private val video = VideoEngine(appContext, selector)
     private val image = ImageEngine(appContext, selector)
+    private val quality = QualityAnalyzer(appContext)
 
     fun probeDevice(): DeviceCapabilityReport = probe.probe()
 
@@ -55,5 +58,31 @@ class CompressionEngine(
                 progress?.onProgress(EncodeProgress(ratio = 1f))
             }
         }
+    }
+
+    fun compareQuality(
+        kind: MediaKind,
+        original: Uri,
+        encoded: Uri,
+        durationUs: Long = 0L,
+    ): QualityReport? {
+        val width: Int
+        val height: Int
+        val duration: Long
+        when (kind) {
+            MediaKind.VIDEO -> {
+                val info = video.inspect(encoded)
+                width = info.displayWidth
+                height = info.displayHeight
+                duration = if (durationUs > 0) durationUs else info.durationUs
+            }
+            MediaKind.IMAGE -> {
+                val info = image.inspect(encoded)
+                width = info.width
+                height = info.height
+                duration = 0L
+            }
+        }
+        return quality.compare(kind, original, encoded, duration, width, height)
     }
 }

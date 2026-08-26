@@ -25,6 +25,7 @@ import com.snapconverter.engine.policy.OutputVideoCodec
 import com.snapconverter.engine.policy.VideoProfileOption
 import com.snapconverter.engine.policy.VideoSourceInfo
 import com.snapconverter.engine.progress.EncodeProgress
+import com.snapconverter.engine.quality.QualityReport
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -68,6 +69,8 @@ data class UiState(
     val outputName: String? = null,
     val outputFolder: String? = null,
     val outputSizeBytes: Long = 0,
+    val qualityReport: QualityReport? = null,
+    val qualityRunning: Boolean = false,
     val error: String? = null,
 )
 
@@ -103,6 +106,8 @@ class JobViewModel(application: Application) : AndroidViewModel(application) {
                     outputName = null,
                     message = null,
                     progress = EncodeProgress(0f),
+                    qualityReport = null,
+                    qualityRunning = false,
                 )
             }
             runCatching {
@@ -159,6 +164,8 @@ class JobViewModel(application: Application) : AndroidViewModel(application) {
                 error = null,
                 message = null,
                 progress = EncodeProgress(0f),
+                qualityReport = null,
+                qualityRunning = false,
             )
         }
     }
@@ -235,8 +242,17 @@ class JobViewModel(application: Application) : AndroidViewModel(application) {
                         outputFolder = published.folderLabel,
                         outputSizeBytes = published.sizeBytes,
                         message = "已保存",
+                        qualityRunning = true,
+                        qualityReport = null,
                     )
                 }
+                val durationUs = snapshot.videoInfo?.durationUs ?: 0L
+                val report = withContext(Dispatchers.Default) {
+                    runCatching {
+                        engine.compareQuality(kind, input, published.uri, durationUs)
+                    }.getOrNull()
+                }
+                _state.update { it.copy(qualityRunning = false, qualityReport = report) }
             }.onFailure { t ->
                 _state.update {
                     it.copy(
