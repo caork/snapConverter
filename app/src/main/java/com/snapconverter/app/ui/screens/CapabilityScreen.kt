@@ -66,7 +66,9 @@ fun CapabilityScreen(
 
             InsetGroup(
                 header = "运行时枚举的能力",
-                footer = "JPEG 必须有公开的硬件编码器才启用，否则宁可拒绝也不做 CPU 软压缩。",
+                footer = "视频、HEIC、AVIF 只走硬件，缺硬件就报错。" +
+                    "JPEG 是唯一的例外：没有可用 Surface 的硬件 JPEG 编码器，" +
+                    "这一路由 CPU 编码，界面上标成「CPU 编码」。",
             ) {
                 capabilityRows(report).forEach { (label, ok) ->
                     row {

@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ErrorOutline
-import androidx.compose.material.icons.rounded.AspectRatio
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ContentCut
@@ -193,7 +192,6 @@ fun HomeScreen(
             if (state.stage == ConvertStage.IDLE || state.stage == ConvertStage.LOADING) {
                 ImportCard(loading = state.stage == ConvertStage.LOADING, onPick = pick)
                 CapabilityCard(state) { sheet = HomeSheet.Capabilities }
-                PipelineCard()
             } else {
                 SourceCard(
                     state = state,
@@ -451,34 +449,10 @@ private fun capabilityChips(state: UiState): List<Pair<String, Boolean>> {
         "AV1" to caps.hardwareAv1Encoder,
         "HEIC" to caps.hardwareHeicPath,
         "AVIF" to (caps.hardwareAv1Encoder && Build.VERSION.SDK_INT >= 31),
-        "JPEG" to caps.hardwareJpegEncoder,
+        "JPEG 硬编" to caps.hardwareJpegEncoder,
         "VMAF 评分" to caps.vmafAvailable,
         "厂商参数" to caps.vendorExtensionsApi,
     )
-}
-
-/** The pipeline, stated plainly — it is the product, so it gets a card. */
-@Composable
-private fun PipelineCard() {
-    ContentCard(padding = PaddingValues(horizontal = Ios27Spacing.lg, vertical = Ios27Spacing.md)) {
-        InfoRow(
-            title = "硬件解码",
-            icon = Icons.Rounded.Memory,
-            subtitle = "MediaCodec 解到 Surface，帧不进 CPU",
-        )
-        InfoRow(
-            title = "GPU 缩放",
-            icon = Icons.Rounded.AspectRatio,
-            tone = TileTone.Green,
-            subtitle = "OpenGL ES 做缩放、旋转、色彩",
-        )
-        InfoRow(
-            title = "硬件编码",
-            icon = Icons.Rounded.Bolt,
-            tone = TileTone.Yellow,
-            subtitle = "没有硬件编码器就直接报错，不软编",
-        )
-    }
 }
 
 private fun capabilitySummary(state: UiState): String? {
@@ -779,10 +753,13 @@ private fun ImageFormatChips(state: UiState, vm: JobViewModel, locked: Boolean) 
         selected = state.imageCodec == OutputImageCodec.AVIF,
         enabled = !locked && caps?.hardwareAv1Encoder == true && Build.VERSION.SDK_INT >= 31,
     ) { vm.setImageCodec(OutputImageCodec.AVIF) }
+    // JPEG is always offered, but it is the one CPU-encoded format, so the chip
+    // says so up front instead of the UI claiming hardware later.
     Chip(
         label = "JPEG",
+        detail = if (caps?.hardwareJpegEncoder == true) null else "CPU",
         selected = state.imageCodec == OutputImageCodec.JPEG,
-        enabled = !locked && caps?.hardwareJpegEncoder == true,
+        enabled = !locked,
     ) { vm.setImageCodec(OutputImageCodec.JPEG) }
 }
 
@@ -895,13 +872,7 @@ private fun ProgressCard(state: UiState) {
                     color = palette.label,
                 )
             }
-            if (state.capabilities?.v1Supported == true) {
-                InfoChip(
-                    label = "硬件编码",
-                    tone = TileTone.Brand,
-                    icon = Icons.Rounded.Bolt,
-                )
-            }
+            EncoderChip(state)
         }
         Spacer(Modifier.height(Ios27Spacing.md))
         IosProgressBar(progress = progress.ratio)
@@ -910,6 +881,31 @@ private fun ProgressCard(state: UiState) {
             text = progressDetail(state),
             style = Ios27Type.footnote,
             color = palette.labelSecondary,
+        )
+    }
+}
+
+/**
+ * Who is doing the encoding. JPEG runs on the CPU, so it says "CPU" — the app
+ * never labels a CPU encode as hardware or as Qualcomm.
+ */
+@Composable
+private fun EncoderChip(state: UiState) {
+    when {
+        state.usesCpuEncoder -> InfoChip(
+            label = "CPU 编码",
+            tone = TileTone.Yellow,
+            icon = Icons.Rounded.Memory,
+        )
+        state.audioOnly -> InfoChip(
+            label = "直通复制",
+            tone = TileTone.Neutral,
+            icon = Icons.Rounded.Bolt,
+        )
+        state.capabilities?.v1Supported == true -> InfoChip(
+            label = "硬件编码",
+            tone = TileTone.Brand,
+            icon = Icons.Rounded.Bolt,
         )
     }
 }
@@ -984,6 +980,8 @@ private fun ResultCards(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            Spacer(Modifier.width(Ios27Spacing.sm))
+            EncoderChip(state)
         }
         Spacer(Modifier.height(Ios27Spacing.lg))
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1087,7 +1085,7 @@ private fun ResultCards(
 }
 
 private fun resultDetail(state: UiState): String = buildList {
-    state.hardwareCodecLabel()?.let { add(it) }
+    add(state.outputCodecLabel())
     state.outputFolder?.takeIf { it.isNotBlank() }?.let { add(it) }
     val video = state.videoInfo
     if (video != null && video.bitrateBps > 0) {
@@ -1095,16 +1093,10 @@ private fun resultDetail(state: UiState): String = buildList {
     }
 }.joinToString(" · ")
 
-private fun UiState.hardwareCodecLabel(): String? {
-    val caps = capabilities ?: return null
-    if (!caps.v1Supported) return null
-    if (audioOnly) return "直通复制"
-    val codec = if (kind == MediaKind.IMAGE) {
-        imageCodecLabel(imageCodec)
-    } else {
-        videoCodecLabel(videoCodec)
-    }
-    return "硬件 " + codec
+private fun UiState.outputCodecLabel(): String = when {
+    audioOnly -> "M4A"
+    kind == MediaKind.IMAGE -> imageCodecLabel(imageCodec)
+    else -> videoCodecLabel(videoCodec)
 }
 
 /* ------------------------------------------------------------------- notices */

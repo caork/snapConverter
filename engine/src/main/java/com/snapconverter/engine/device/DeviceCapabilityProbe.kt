@@ -36,7 +36,7 @@ class DeviceCapabilityProbe(
                 add("No Qualcomm video encoder enumerated. V1 will refuse to encode.")
             }
             if (jpeg == null) {
-                add("No public hardware JPEG encoder. JPEG output is disabled; use HEIC.")
+                add("No public hardware JPEG encoder. JPEG output runs on the CPU and is labelled CPU.")
             }
             if (Build.VERSION.SDK_INT < 31) {
                 add("API ${Build.VERSION.SDK_INT}: vendor extension probe requires API 31+.")

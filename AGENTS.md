@@ -32,9 +32,9 @@ These are product rules, not style preferences. A change that violates them is i
 1. **Do not make FFmpeg the core pipeline.** No JNI `libavcodec` / `libx264` / `libx265` / `libvpx` encode path. FFmpeg must not be added as a Gradle dependency.
 2. **Do not run software codecs.** Reject `c2.android.*`, `OMX.google.*`, `isSoftwareOnly() == true`. Never call `MediaCodec.createEncoderByType()` and assume the result is hardware.
 3. **Do not put decoded frames on the CPU as the main path.** No `Bitmap` / `ByteArray` / `YUV` round-trip per video frame. The path is decoder Surface → GL texture → encoder Surface.
-4. **Do not use `Bitmap.compress()` as the image encode path.**
-5. **Do not use `Bitmap.createScaledBitmap()` as the image resize path.**
-6. **Do not silently fall back to CPU encode.** If the required hardware encoder is missing, fail and tell the user. JPEG without an exposed hardware encoder must refuse, not encode in software.
+4. **Do not use `Bitmap.compress()` as the image encode path** — with one declared exception: **JPEG**. No Android device exposes a public MediaCodec JPEG encoder that accepts `COLOR_FormatSurface`, so `ImageEngine.encodeJpegOnCpu` encodes JPEG with libjpeg through `Bitmap.compress`, and the UI labels that job **“CPU 编码”**, never “硬件” and never “Qualcomm” (`UiState.usesCpuEncoder` → `EncoderChip`). HEIC, AVIF and all video stay hardware-only.
+5. **Do not use `Bitmap.createScaledBitmap()` as the image resize path.** The JPEG path resamples in the platform decoder (`ImageDecoder.setTargetSize`); everything else resamples in GLES.
+6. **Do not silently fall back to CPU encode.** If the required hardware encoder is missing, fail and tell the user. The JPEG path in rule 4 is a *declared* CPU path the user chooses and sees labelled — it must never be used to rescue a failed hardware encode.
 7. **Do not hard-code a SoC marketing name as capability.** Enumerate `MediaCodecList` at runtime. Capability-driven, not “Snapdragon 8 Gen 3 therefore AV1 encode”.
 8. **Do not put `c2.qti.hevc.encoder` string literals in UI or policy code.** Codec names live in `HardwareCodecSelector` / vendor policy. Business code asks for “hardware HEVC encoder, Qualcomm preferred”.
 9. **V1 encode is Qualcomm-only.** Other vendors get a clear “unsupported device” error until a `MediaTekCodecPolicy` / `ExynosCodecPolicy` exists. Decoder may accept any hardware decoder, but still reject software.
@@ -53,7 +53,7 @@ These are product rules, not style preferences. A change that violates them is i
 | Decode / encode | `MediaCodec.createByCodecName(...)` after enumeration |
 | GPU | EGL + OpenGL ES 3.x, `GL_OES_EGL_image_external` |
 | Mux | `MediaMuxer` (MP4) |
-| Photos | `androidx.heifwriter.HeifWriter` with hardware-only preference; JPEG only if a hardware JPEG encoder is enumerable |
+| Photos | `androidx.heifwriter.HeifWriter` / `AvifWriter` with hardware-only preference; JPEG via libjpeg on the CPU, labelled as CPU |
 | Snapdragon extras | Qualcomm vendor keys (`vendor.qti-ext-*`), probed at runtime |
 | Media3 Transformer | Optional research / future helper. Not the V1 core path. |
 | Tests | JVM unit tests for pure policy/name logic; instrumented tests later for MediaCodec |
@@ -115,10 +115,19 @@ ImageDecoder
   → OpenGL ES texture
   → Adreno resize / crop / rotate
   → HEIC via HeifWriter SURFACE + hardware HEVC still encoder
-     or JPEG via an enumerated hardware JPEG encoder
+     or AVIF via AvifWriter SURFACE + hardware AV1 still encoder
 ```
 
-If JPEG hardware is not exposed as a third-party `MediaCodec`, the UI must disable JPEG and say so. No silent `Bitmap.CompressFormat.JPEG`.
+JPEG does not use that pipeline, because no device exposes a Surface-capable
+hardware JPEG encoder to third-party apps:
+
+```text
+ImageDecoder (setTargetSize = output size)
+  → Bitmap.compress(JPEG, quality)   ← CPU, labelled "CPU 编码" in the UI
+```
+
+That label is the condition for the exception. JPEG may be encoded on the CPU
+because the user picked JPEG and can see who encoded it; nothing else may.
 
 ### Encoder selection (required)
 
@@ -170,7 +179,7 @@ videoBitrate ≈ (targetFileSizeBits - estimatedAudioBits - containerOverhead) /
 - Video in: MP4 / MOV via `MediaExtractor`
 - Video out: H.264 / H.265 MP4
 - Image in: JPEG / PNG / WebP / HEIC / AVIF (decode requires API 31+)
-- Image out: HEIC (hardware HEVC still), AVIF (hardware AV1 still, capability-gated), JPEG only if HW encoder is public
+- Image out: HEIC (hardware HEVC still), AVIF (hardware AV1 still, capability-gated), JPEG (CPU path, labelled “CPU 编码”)
 - Image export size: presets or explicit custom W×H (aspect lock in UI; GPU resample)
 - TIFF is explicitly not offered: no Android hardware encoder exists and the framework cannot decode TIFF; a TIFF path would be a pure-CPU encode, violating the core constraint
 - Resolution: original / 2160p / 1440p / 1080p / 720p

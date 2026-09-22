@@ -91,7 +91,7 @@ internal fun qualityModeHint(state: UiState): String {
         return when (state.imageCodec) {
             OutputImageCodec.HEIC -> "写入 HEIC 的 quality，走硬件 HEVC still 编码。"
             OutputImageCodec.AVIF -> "写入 AVIF 的 quality，走硬件 AV1 单帧编码。"
-            OutputImageCodec.JPEG -> "写入硬件 JPEG 编码器的 quality。"
+            OutputImageCodec.JPEG -> "写入 libjpeg 的 quality，这一路在 CPU 上编码。"
         }
     }
     val encoder = selectedVideoEncoder(state) ?: return "正在读取编码器能力…"
@@ -154,8 +154,11 @@ internal fun formatHint(state: UiState): String? {
         return when {
             state.imageCodec == OutputImageCodec.AVIF ->
                 "AVIF 走硬件 AV1 单帧编码，体积通常比 HEIC 更小。"
-            !caps.hardwareJpegEncoder ->
-                "本机未枚举到硬件 JPEG 编码器，为避免 CPU 软压缩已禁用 JPEG。"
+            state.imageCodec == OutputImageCodec.JPEG ->
+                "JPEG 没有可用 Surface 的硬件编码器，这一路由 CPU 编码，" +
+                    "界面上会标成「CPU 编码」。要硬件编码请选 HEIC。"
+            state.imageCodec == OutputImageCodec.HEIC ->
+                "HEIC 走硬件 HEVC 单帧编码，同画质体积约为 JPEG 的一半。"
             else -> null
         }
     }

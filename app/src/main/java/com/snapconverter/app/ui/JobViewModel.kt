@@ -161,6 +161,14 @@ data class UiState(
     /** True when the user has actually narrowed the trim window. */
     val trimActive: Boolean
         get() = trimStartSec > 0 || (durationSec > 0 && trimEndSec in 1 until durationSec)
+
+    /**
+     * True for the one job that is encoded by the CPU: JPEG. No device exposes
+     * a Surface-capable hardware JPEG encoder, so the format is offered with a
+     * "CPU" label instead of being refused. Everything else is hardware-only.
+     */
+    val usesCpuEncoder: Boolean
+        get() = kind == MediaKind.IMAGE && imageCodec == OutputImageCodec.JPEG
 }
 
 class JobViewModel(application: Application) : AndroidViewModel(application) {
@@ -248,11 +256,7 @@ class JobViewModel(application: Application) : AndroidViewModel(application) {
                         captureTimeMs = identity.captureTimeMs ?: video?.captureTimeMs ?: image?.captureTimeMs,
                         videoInfo = video,
                         imageInfo = image,
-                        imageCodec = if (it.capabilities?.hardwareJpegEncoder == true) {
-                            it.imageCodec
-                        } else {
-                            OutputImageCodec.HEIC
-                        },
+                        imageCodec = it.imageCodec,
                     )
                 }
                 if (autostart) start()
@@ -514,16 +518,13 @@ class JobViewModel(application: Application) : AndroidViewModel(application) {
         val input = snapshot.input ?: return
         val kind = snapshot.kind ?: return
         val caps = snapshot.capabilities
-        if (caps?.v1Supported != true) {
+        // Two jobs never touch the video encoder, so the Qualcomm V1 gate does
+        // not apply to them: audio extraction is a passthrough remux, and JPEG
+        // is the declared CPU path (labelled as CPU in the UI).
+        if (caps?.v1Supported != true && !snapshot.usesCpuEncoder && !snapshot.audioOnly) {
             _state.update { it.copy(error = "这台设备没有可用的高通硬件编码器。") }
             return
         }
-        if (kind == MediaKind.IMAGE && snapshot.imageCodec == OutputImageCodec.JPEG && caps.hardwareJpegEncoder.not()) {
-            _state.update { it.copy(error = "没有公开的 JPEG 硬件编码器，请选择 HEIC。") }
-            return
-        }
-        // Audio-only extraction is pure passthrough (no encoder involved), so
-        // it stays available regardless of the Qualcomm V1 gate.
         if (kind == MediaKind.VIDEO && snapshot.audioOnly) {
             if (snapshot.videoInfo?.audioMime == null) {
                 _state.update { it.copy(error = "此视频没有音轨，无法提取音频。") }

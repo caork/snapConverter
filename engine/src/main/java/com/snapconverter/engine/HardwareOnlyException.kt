@@ -20,12 +20,6 @@ class HardwareEncoderRequiredException(mime: String) :
 class HardwareDecoderRequiredException(mime: String) :
     HardwareOnlyException("No hardware decoder exposed for $mime on this device.")
 
-class JpegHardwareUnavailableException :
-    HardwareOnlyException(
-        "This device does not expose a hardware JPEG encoder to third-party apps. " +
-            "Choose HEIC, or do not encode JPEG.",
-    )
-
 class SoftwareCodecRejectedException(codecName: String) :
     HardwareOnlyException("Rejected software / AOSP codec: $codecName")
 

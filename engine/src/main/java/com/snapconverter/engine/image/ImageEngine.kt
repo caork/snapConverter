@@ -10,7 +10,6 @@ import android.view.Surface
 import androidx.heifwriter.AvifWriter
 import androidx.heifwriter.EncoderPreference
 import androidx.heifwriter.HeifWriter
-import com.snapconverter.engine.JpegHardwareUnavailableException
 import com.snapconverter.engine.codec.HardwareCodecSelector
 import com.snapconverter.engine.gpu.EglCore
 import com.snapconverter.engine.gpu.ImageTextureRenderer
@@ -21,6 +20,7 @@ import com.snapconverter.engine.policy.ImageEncodePlan
 import com.snapconverter.engine.media.CaptureTimestamp
 import com.snapconverter.engine.policy.ImageSourceInfo
 import com.snapconverter.engine.policy.OutputImageCodec
+import java.io.FileOutputStream
 
 class ImageEngine(
     private val context: Context,
@@ -59,21 +59,47 @@ class ImageEngine(
         when (plan.codec) {
             OutputImageCodec.HEIC -> encodeHeic(input, outputPfd, plan)
             OutputImageCodec.AVIF -> encodeAvif(input, outputPfd, plan)
-            OutputImageCodec.JPEG -> encodeJpegOrThrow()
+            OutputImageCodec.JPEG -> encodeJpegOnCpu(input, outputPfd, plan)
         }
     }
 
-    private fun encodeJpegOrThrow(): Nothing {
-        val jpeg = selector.findJpegHardwareEncoder()
-            ?: throw JpegHardwareUnavailableException()
-        // A public MediaCodec JPEG encoder, when present, almost never accepts
-        // COLOR_FormatSurface. SnapConverter refuses a CPU Bitmap.compress path.
-        throw JpegHardwareUnavailableException().also {
-            it.initCause(
-                IllegalStateException(
-                    "Enumerated ${jpeg.name} but JPEG Surface encode is not wired; use HEIC.",
-                ),
-            )
+    /**
+     * JPEG is the one declared exception to the hardware-only rule.
+     *
+     * No Android device exposes a public MediaCodec JPEG encoder that accepts
+     * `COLOR_FormatSurface`, so a Surface path does not exist to write. Rather
+     * than refuse the format, JPEG is encoded by the platform's libjpeg through
+     * [Bitmap.compress] and the UI labels the job "CPU", never "hardware" and
+     * never "Qualcomm". Scaling is done by the platform decoder at decode time,
+     * not by `Bitmap.createScaledBitmap`.
+     *
+     * This is not a fallback: it never rescues a failed hardware encode, and
+     * HEIC / AVIF / video still refuse rather than run on the CPU.
+     */
+    private fun encodeJpegOnCpu(
+        input: Uri,
+        outputPfd: ParcelFileDescriptor,
+        plan: ImageEncodePlan,
+    ) {
+        val bitmap = decodeAtSize(input, plan.width, plan.height)
+        try {
+            FileOutputStream(outputPfd.fileDescriptor).use { out ->
+                val ok = bitmap.compress(Bitmap.CompressFormat.JPEG, plan.quality, out)
+                if (!ok) throw IllegalStateException("JPEG encode failed")
+                out.flush()
+            }
+        } finally {
+            if (!bitmap.isRecycled) bitmap.recycle()
+        }
+    }
+
+    /** Decode straight to the output size; the decoder resamples, we do not. */
+    private fun decodeAtSize(uri: Uri, width: Int, height: Int): Bitmap {
+        val source = ImageDecoder.createSource(context.contentResolver, uri)
+        return ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+            decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            decoder.isMutableRequired = false
+            if (width > 0 && height > 0) decoder.setTargetSize(width, height)
         }
     }
 
