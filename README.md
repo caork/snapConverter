@@ -23,16 +23,21 @@ Photos follow the same rule. `Bitmap.compress(JPEG, …)` is not hardware encode
 | | Input | Output |
 | --- | --- | --- |
 | Video | MP4, MOV | H.265 / H.264 MP4 |
-| Image | JPEG, PNG, WebP, HEIC | HEIC (HW), JPEG (HW only) |
+| Image | JPEG, PNG, WebP, HEIC, AVIF (API 31+) | HEIC (HW HEVC still), AVIF (HW AV1 still), JPEG (HW only) |
 
-- Resolution: original, 2160p, 1440p, 1080p, 720p
+- Resolution: original, 2160p, 1440p, 1080p, 720p, or **custom W×H with aspect lock** (images, GPU resample)
 - Frame rate: original, 60, 30, 24
-- Modes: quality 0–100, target bitrate, target file size
-- Hardware: **Qualcomm MediaCodec only** (no software fallback)
+- Modes: quality 0–100, target bitrate, target file size, target SSIM, target VMAF
+- Trim: precise frame-accurate window re-encoded through the hardware pipeline (audio trimmed in sync)
+- Audio extraction: passthrough copy to M4A via Extractor → Muxer (no codec, lossless)
+- Mute: drop the audio track from the output
+- Hardware: **Qualcomm MediaCodec only** for encode (no software fallback)
 - GPU: OpenGL ES 3.x
 - Audio: copied into the MP4, not re-encoded
 
-AV1 / AVIF, HDR, ROI, and other-vendor SoCs are V2.
+Format availability is capability-driven: AVIF appears only when a hardware AV1 encoder enumerates; JPEG stays disabled when no public hardware JPEG encoder exists (CPU Bitmap.compress is refused by design). TIFF is not offered: Android has no hardware TIFF encoder and the framework cannot even decode TIFF, so it could only exist as a pure-CPU encode path.
+
+AV1 video, HDR, ROI, and other-vendor SoCs are V2.
 
 ## Architecture
 

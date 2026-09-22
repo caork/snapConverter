@@ -20,6 +20,7 @@ data class DeviceCapabilityReport(
     val encoders: List<CodecCandidate>,
     val decoders: List<CodecCandidate>,
     val jpegEncoderName: String?,
+    val vmafAvailable: Boolean = false,
     val notes: List<String>,
 ) {
     val v1Supported: Boolean

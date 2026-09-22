@@ -12,12 +12,17 @@ import android.view.Surface
  * EGL 1.4 core for recordable GLES 3 (fallback GLES 2) contexts.
  * Must be used from a single thread.
  */
-class EglCore(sharedContext: EGLContext = EGL14.EGL_NO_CONTEXT) {
+class EglCore(
+    sharedContext: EGLContext = EGL14.EGL_NO_CONTEXT,
+    val windowColorspace: Int? = null,
+    val preferTenBit: Boolean = false,
+) {
 
     val display: EGLDisplay
     val context: EGLContext
     private val config: EGLConfig
     val glesVersion: Int
+    val tenBit: Boolean
 
     init {
         display = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
@@ -28,15 +33,18 @@ class EglCore(sharedContext: EGLContext = EGL14.EGL_NO_CONTEXT) {
         if (!EGL14.eglInitialize(display, version, 0, version, 1)) {
             throw RuntimeException("unable to initialize EGL14")
         }
-        val gles3 = chooseConfig(3)
+        val hdr10 = if (preferTenBit) chooseConfig(3, tenBit = true) else null
+        val gles3 = hdr10 ?: chooseConfig(3, tenBit = false)
         if (gles3 != null) {
             config = gles3
             context = createContext(sharedContext, 3)
             glesVersion = 3
+            tenBit = hdr10 != null
         } else {
-            config = chooseConfig(2) ?: throw RuntimeException("no EGL config")
+            config = chooseConfig(2, tenBit = false) ?: throw RuntimeException("no EGL config")
             context = createContext(sharedContext, 2)
             glesVersion = 2
+            tenBit = false
         }
         if (context == EGL14.EGL_NO_CONTEXT) {
             throw RuntimeException("failed to create EGL context: 0x" + Integer.toHexString(EGL14.eglGetError()))
@@ -44,6 +52,24 @@ class EglCore(sharedContext: EGLContext = EGL14.EGL_NO_CONTEXT) {
     }
 
     fun createWindowSurface(surface: Surface): EGLSurface {
+        val color = windowColorspace
+        if (color != null) {
+            EGL14.eglGetError()
+            val hdrSurface = EGL14.eglCreateWindowSurface(
+                display,
+                config,
+                surface,
+                intArrayOf(EGL_GL_COLORSPACE_KHR, color, EGL14.EGL_NONE),
+                0,
+            )
+            val err = EGL14.eglGetError()
+            if (err == EGL14.EGL_SUCCESS && hdrSurface != null && hdrSurface != EGL14.EGL_NO_SURFACE) {
+                return hdrSurface
+            }
+            if (hdrSurface != null && hdrSurface != EGL14.EGL_NO_SURFACE) {
+                EGL14.eglDestroySurface(display, hdrSurface)
+            }
+        }
         val attribs = intArrayOf(EGL14.EGL_NONE)
         val eglSurface = EGL14.eglCreateWindowSurface(display, config, surface, attribs, 0)
         checkEgl("eglCreateWindowSurface")
@@ -94,17 +120,19 @@ class EglCore(sharedContext: EGLContext = EGL14.EGL_NO_CONTEXT) {
         return EGL14.eglCreateContext(display, config, shared, attribs, 0)
     }
 
-    private fun chooseConfig(glesVersion: Int): EGLConfig? {
+    private fun chooseConfig(glesVersion: Int, tenBit: Boolean): EGLConfig? {
         val renderable = if (glesVersion >= 3) {
             EGLExt.EGL_OPENGL_ES3_BIT_KHR
         } else {
             EGL14.EGL_OPENGL_ES2_BIT
         }
+        val r = if (tenBit) 10 else 8
+        val a = if (tenBit) 2 else 8
         val attribs = intArrayOf(
-            EGL14.EGL_RED_SIZE, 8,
-            EGL14.EGL_GREEN_SIZE, 8,
-            EGL14.EGL_BLUE_SIZE, 8,
-            EGL14.EGL_ALPHA_SIZE, 8,
+            EGL14.EGL_RED_SIZE, r,
+            EGL14.EGL_GREEN_SIZE, r,
+            EGL14.EGL_BLUE_SIZE, r,
+            EGL14.EGL_ALPHA_SIZE, a,
             EGL14.EGL_RENDERABLE_TYPE, renderable,
             EGL_RECORDABLE_ANDROID, 1,
             EGL14.EGL_NONE,
@@ -126,5 +154,6 @@ class EglCore(sharedContext: EGLContext = EGL14.EGL_NO_CONTEXT) {
 
     companion object {
         const val EGL_RECORDABLE_ANDROID = 0x3142
+        const val EGL_GL_COLORSPACE_KHR = 0x309D
     }
 }

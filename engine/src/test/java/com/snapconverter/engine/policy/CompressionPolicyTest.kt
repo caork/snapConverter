@@ -125,6 +125,50 @@ class CompressionPolicyTest {
     }
 
     @Test
+    fun autoQualityUsesVbrNotCq() {
+        val plan = policy.planVideo(
+            source,
+            request(bitrateMode = BitrateModeOption.AUTO, appQuality = 70),
+            encoder(
+                modes = setOf(
+                    EncoderCapabilities.BITRATE_MODE_CQ,
+                    EncoderCapabilities.BITRATE_MODE_VBR,
+                ),
+                qualityRange = 0..100,
+            ),
+        )
+        assertEquals(EncoderCapabilities.BITRATE_MODE_VBR, plan.bitrateMode)
+        assertNull(plan.codecQuality)
+        assertEquals(4_000_000, plan.bitrateBps)
+        assertEquals(8_000_000, plan.maxBitrateBps)
+    }
+
+    @Test
+    fun hdrSourceForcesHevcMain10AndKeepsPq() {
+        val hdr = source.copy(
+            colorStandard = MediaFormat.COLOR_STANDARD_BT2020,
+            colorTransfer = MediaFormat.COLOR_TRANSFER_ST2084,
+            colorRange = MediaFormat.COLOR_RANGE_LIMITED,
+        )
+        val plan = policy.planVideo(
+            hdr,
+            request(),
+            encoder(
+                modes = setOf(EncoderCapabilities.BITRATE_MODE_VBR),
+                profileLevels = listOf(
+                    CodecProfileLevel.HEVCProfileMain10 to CodecProfileLevel.HEVCHighTierLevel51,
+                ),
+            ),
+        )
+        assertEquals(CodecProfileLevel.HEVCProfileMain10, plan.profile)
+        assertEquals(MediaFormat.COLOR_STANDARD_BT2020, plan.colorStandard)
+        assertEquals(MediaFormat.COLOR_TRANSFER_ST2084, plan.colorTransfer)
+        assertEquals(MediaFormat.COLOR_RANGE_LIMITED, plan.colorRange)
+        assertTrue(plan.hdr)
+        assertTrue(plan.bitrateBps > 4_000_000)
+    }
+
+    @Test
     fun hdEncodeIsTaggedBt709Limited() {
         val plan = policy.planVideo(
             source,

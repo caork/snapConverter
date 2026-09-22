@@ -105,6 +105,10 @@ class HardwareCodecSelector(
         listCandidates(encoder = true, mime = MimeTypes.HEVC).any { it.hardwareAccelerated } ||
             listCandidates(encoder = true, mime = MimeTypes.HEIC).any { it.hardwareAccelerated }
 
+    /** AVIF still encode runs through a hardware AV1 encoder (single intra frame). */
+    fun hasHardwareAv1StillEncoder(): Boolean =
+        listCandidates(encoder = true, mime = MimeTypes.AV1).any { it.hardwareAccelerated && !it.softwareOnly }
+
     fun findJpegHardwareEncoder(): CodecCandidate? {
         val mimes = listOf(MimeTypes.JPEG, "image/vnd.qcom.jpeg")
         return mimes.firstNotNullOfOrNull { mime ->

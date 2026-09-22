@@ -157,7 +157,7 @@ The UI slider `0..100` is `AppQuality`. It must be mapped by `CompressionPolicy`
 - optional QP bounds
 - optional vendor keys on API 31+
 
-Prefer CQ (`BITRATE_MODE_CQ` + `KEY_QUALITY`) when the encoder reports it. Otherwise VBR + a bitrate model. `KEY_QUALITY` is vendor-specific; never assume `quality=70` is comparable across devices.
+Quality mode uses VBR + the bitrate model (HDR sources get a 1.5× bump). Unbounded CQ does not compress; CQ is opt-in in advanced settings and still gets a max-bitrate cap. `KEY_QUALITY` is vendor-specific; never assume `quality=70` is comparable across devices.
 
 Target-size mode:
 
@@ -169,21 +169,27 @@ videoBitrate ≈ (targetFileSizeBits - estimatedAudioBits - containerOverhead) /
 
 - Video in: MP4 / MOV via `MediaExtractor`
 - Video out: H.264 / H.265 MP4
-- Image in: JPEG / PNG / WebP / HEIC
-- Image out: HEIC (hardware), JPEG only if HW encoder is public
+- Image in: JPEG / PNG / WebP / HEIC / AVIF (decode requires API 31+)
+- Image out: HEIC (hardware HEVC still), AVIF (hardware AV1 still, capability-gated), JPEG only if HW encoder is public
+- Image export size: presets or explicit custom W×H (aspect lock in UI; GPU resample)
+- TIFF is explicitly not offered: no Android hardware encoder exists and the framework cannot decode TIFF; a TIFF path would be a pure-CPU encode, violating the core constraint
 - Resolution: original / 2160p / 1440p / 1080p / 720p
 - FPS: original / 60 / 30 / 24
-- Modes: quality 0–100, target bitrate, target file size
+- Modes: quality 0–100, target bitrate, target file size, target SSIM, target VMAF
+- Precise trim: trimStartUs/trimEndUs on CompressionRequest, re-encoded through the hardware pipeline; audio passthrough honors the same window (PTS rebased)
+- Audio-only extraction: AudioExtractor (Extractor → Muxer → M4A), pure passthrough, no codec involved, not gated on Qualcomm encoder availability
+- Mute: muteAudio on CompressionRequest drops the audio track
 - Device capability screen from live `MediaCodecList`
+- HDR in → HDR out (HEVC/AV1 Main10, HLG / HDR10 metadata, 10-bit BT.2020 EGL). No silent SDR fallback.
 - OpenGL ES 3.x frame processor
 - Qualcomm vendor parameter probe (API 31+)
 
 ## V2 scope (out until explicitly requested)
 
-- AV1 / AVIF hardware
-- HDR preserve and HDR→SDR tone map
+- AV1 / AVIF beyond what capability enumeration exposes (e.g. AVIF sequence/animation, high-bitdepth stills beyond the default profile)
+- HDR→SDR tone map
 - ROI encoding, LTR, encoder statistics-driven bitrate
-- Content-aware bitrate, VMAF/SSIM
+- Content-aware bitrate
 - Batch queue
 - MediaTek / Exynos vendor policies
 - Media3 Transformer as an alternate engine

@@ -3,6 +3,7 @@ package com.snapconverter.engine.policy
 import android.media.MediaCodecInfo
 import android.media.MediaCodecInfo.EncoderCapabilities
 import android.media.MediaFormat
+import com.snapconverter.engine.HdrEncodeUnavailableException
 import com.snapconverter.engine.codec.CodecCandidate
 import com.snapconverter.engine.codec.MimeTypes
 import kotlin.math.roundToInt
@@ -49,16 +50,28 @@ class CompressionPolicy {
             audioBitrateBps = source.audioBitrateBps.takeIf { it > 0 }
                 ?: BitrateEstimator.DEFAULT_AUDIO_BITRATE_BPS,
         )
+        val hdr = source.isHdr
+        val hdrBitrate = if (hdr) {
+            (qualityBitrate * 3 / 2).coerceIn(80_000, 80_000_000)
+        } else {
+            qualityBitrate
+        }
+        val sourceCap = source.bitrateBps.takeIf { it > 0 }
+            ?.let { (it * 3L / 2L).coerceIn(80_000L, 80_000_000L).toInt() }
         val bitrate = when (request.bitrateMode) {
             BitrateModeOption.VBR, BitrateModeOption.CBR ->
-                request.targetBitrateBps ?: qualityBitrate
-            BitrateModeOption.CQ -> qualityBitrate
+                request.targetBitrateBps ?: hdrBitrate
+            BitrateModeOption.CQ -> hdrBitrate
             BitrateModeOption.AUTO -> when (request.mode) {
-                CompressionMode.TARGET_BITRATE, CompressionMode.TARGET_SSIM ->
-                    request.targetBitrateBps ?: qualityBitrate
+                CompressionMode.TARGET_BITRATE, CompressionMode.TARGET_SSIM, CompressionMode.TARGET_VMAF ->
+                    request.targetBitrateBps ?: hdrBitrate
                 CompressionMode.TARGET_SIZE -> estimatedForSize
-                CompressionMode.LOSSLESS_REMUX -> source.bitrateBps.takeIf { it > 0 } ?: qualityBitrate
-                CompressionMode.QUALITY -> qualityBitrate
+                CompressionMode.LOSSLESS_REMUX -> source.bitrateBps.takeIf { it > 0 } ?: hdrBitrate
+                CompressionMode.QUALITY -> {
+                    // Transcode must not balloon past 1.5x the source bitrate
+                    // (product rule: output size stays within 1.5x of the original).
+                    sourceCap?.let { minOf(hdrBitrate, it) } ?: hdrBitrate
+                }
             }
         }.coerceIn(80_000, 80_000_000)
 
@@ -75,11 +88,7 @@ class CompressionPolicy {
             } else {
                 pickRateControl(vbrSupported, cbrSupported, preferVbr = true)
             }
-            BitrateModeOption.AUTO -> when {
-                request.mode == CompressionMode.QUALITY && cqSupported ->
-                    EncoderCapabilities.BITRATE_MODE_CQ
-                else -> pickRateControl(vbrSupported, cbrSupported, preferVbr = true)
-            }
+            BitrateModeOption.AUTO -> pickRateControl(vbrSupported, cbrSupported, preferVbr = true)
         }
 
         val useCq = bitrateMode == EncoderCapabilities.BITRATE_MODE_CQ && encoder.qualityRange != null
@@ -96,7 +105,11 @@ class CompressionPolicy {
             ComplexityOption.MEDIUM -> encoder.complexityRange?.let { (it.first + it.last) / 2 }
         }
 
-        val profile = profileFor(request.profile, mime)?.takeIf { encoder.supportsProfile(it) }
+        val color = source.color.withDefaultsForEncode()
+        if (hdr && (mime == MimeTypes.AVC)) {
+            throw HdrEncodeUnavailableException("H.264 cannot carry HDR.")
+        }
+        val profile = resolveProfile(request.profile, mime, hdr, encoder)
         val level = profile?.let { encoder.highestLevelFor(it) }
         val baseline = profile == MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline
         val maxB = if (baseline) {
@@ -107,7 +120,8 @@ class CompressionPolicy {
         val maxBitrate = when (bitrateMode) {
             EncoderCapabilities.BITRATE_MODE_CBR -> bitrate
             EncoderCapabilities.BITRATE_MODE_VBR ->
-                request.maxBitrateBps?.takeIf { it > bitrate }
+                request.maxBitrateBps?.takeIf { it > bitrate } ?: (bitrate * 2)
+            EncoderCapabilities.BITRATE_MODE_CQ -> (bitrate * 2)
             else -> null
         }
 
@@ -147,16 +161,22 @@ class CompressionPolicy {
             qpPMax = qpPMax,
             qpBMin = qpBMin,
             qpBMax = qpBMax,
-            colorStandard = source.colorStandard
-                ?: MediaFormat.COLOR_STANDARD_BT709,
-            colorRange = MediaFormat.COLOR_RANGE_LIMITED,
-            colorTransfer = source.colorTransfer
-                ?: MediaFormat.COLOR_TRANSFER_SDR_VIDEO,
+            colorStandard = color.standard,
+            colorRange = color.range,
+            colorTransfer = color.transfer,
+            hdrStaticInfo = color.hdrStaticInfo,
+            hdr = hdr,
         )
     }
 
     fun planImage(source: ImageSourceInfo, request: CompressionRequest): ImageEncodePlan {
-        val sized = capResolution(source.width, source.height, request.resolution)
+        val sized = if (request.imageCustomWidth != null && request.imageCustomHeight != null) {
+            // Explicit export size (Photoshop-style custom dimensions). The GPU
+            // still performs the resample; this only changes target geometry.
+            request.imageCustomWidth to request.imageCustomHeight
+        } else {
+            capResolution(source.width, source.height, request.resolution)
+        }
         return ImageEncodePlan(
             codec = request.imageCodec,
             width = alignEven(sized.first.coerceAtLeast(2)),
@@ -173,10 +193,13 @@ class CompressionPolicy {
         OutputVideoCodec.AV1 -> MimeTypes.AV1
     }
 
-    fun preferredMimes(codec: OutputVideoCodec): List<String> = when (codec) {
-        OutputVideoCodec.HEVC -> listOf(MimeTypes.HEVC, MimeTypes.AVC)
-        OutputVideoCodec.AVC -> listOf(MimeTypes.AVC)
-        OutputVideoCodec.AV1 -> listOf(MimeTypes.AV1, MimeTypes.HEVC, MimeTypes.AVC)
+    fun preferredMimes(codec: OutputVideoCodec, hdr: Boolean = false): List<String> {
+        val mimes = when (codec) {
+            OutputVideoCodec.HEVC -> listOf(MimeTypes.HEVC, MimeTypes.AVC)
+            OutputVideoCodec.AVC -> listOf(MimeTypes.AVC)
+            OutputVideoCodec.AV1 -> listOf(MimeTypes.AV1, MimeTypes.HEVC, MimeTypes.AVC)
+        }
+        return if (hdr) mimes.filter { it != MimeTypes.AVC } else mimes
     }
 
     private fun displaySize(source: VideoSourceInfo): Pair<Int, Int> {
@@ -217,6 +240,29 @@ class CompressionPolicy {
             cbr -> EncoderCapabilities.BITRATE_MODE_CBR
             else -> EncoderCapabilities.BITRATE_MODE_VBR
         }
+    }
+
+    private fun resolveProfile(
+        option: VideoProfileOption,
+        mime: String,
+        hdr: Boolean,
+        encoder: CodecCandidate,
+    ): Int? {
+        val wanted = when {
+            hdr && option == VideoProfileOption.AUTO -> VideoProfileOption.MAIN10
+            hdr && option == VideoProfileOption.MAIN -> VideoProfileOption.MAIN10
+            else -> option
+        }
+        val profile = profileFor(wanted, mime) ?: return null
+        if (!encoder.supportsProfile(profile)) {
+            if (hdr) {
+                throw HdrEncodeUnavailableException(
+                    "Encoder ${encoder.name} has no Main10 profile for HDR.",
+                )
+            }
+            return null
+        }
+        return profile
     }
 
     private fun profileFor(option: VideoProfileOption, mime: String): Int? = when (option) {

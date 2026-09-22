@@ -7,6 +7,7 @@ import android.net.Uri
 import android.opengl.EGL14
 import android.os.ParcelFileDescriptor
 import android.view.Surface
+import androidx.heifwriter.AvifWriter
 import androidx.heifwriter.EncoderPreference
 import androidx.heifwriter.HeifWriter
 import com.snapconverter.engine.JpegHardwareUnavailableException
@@ -57,6 +58,7 @@ class ImageEngine(
         val plan = policy.planImage(source, request)
         when (plan.codec) {
             OutputImageCodec.HEIC -> encodeHeic(input, outputPfd, plan)
+            OutputImageCodec.AVIF -> encodeAvif(input, outputPfd, plan)
             OutputImageCodec.JPEG -> encodeJpegOrThrow()
         }
     }
@@ -83,23 +85,8 @@ class ImageEngine(
         if (!selector.hasHardwareHeicEncoder()) {
             throw com.snapconverter.engine.HardwareEncoderRequiredException("HEIC/HEVC still")
         }
-        val bitmap = decodeForGpu(input)
-        var writer: HeifWriter? = null
-        var egl: EglCore? = null
-        var window: WindowSurface? = null
-        var renderer: ImageTextureRenderer? = null
-        try {
-            val preference = EncoderPreference.Builder()
-                .setEncoderType(EncoderPreference.HARDWARE_ENCODER_ONLY)
-                .setBitrateMode(
-                    if (plan.requireConstantQuality) {
-                        EncoderPreference.CONSTANT_QUALITY_MODE_ONLY
-                    } else {
-                        EncoderPreference.CONSTANT_QUALITY_MODE_PREFERRED
-                    },
-                )
-                .build()
-            writer = HeifWriter.Builder(
+        encodeStillViaSurface(input, plan) {
+            HeifWriter.Builder(
                 outputPfd.fileDescriptor,
                 plan.width,
                 plan.height,
@@ -108,10 +95,107 @@ class ImageEngine(
                 .setQuality(plan.quality)
                 .setMaxImages(1)
                 .setGridEnabled(false)
-                .setEncoderPreference(preference)
+                .setEncoderPreference(hardwareOnlyPreference(plan))
                 .build()
-            writer.start()
-            val surface: Surface = writer.inputSurface
+                .let { writer -> StillWriterSession.of(writer) }
+        }
+    }
+
+    /**
+     * AVIF still image: same Surface/GLES path, but the container muxer is
+     * AvifWriter and the encode runs on a hardware AV1 encoder (single intra
+     * frame). No software fallback exists.
+     */
+    private fun encodeAvif(
+        input: Uri,
+        outputPfd: ParcelFileDescriptor,
+        plan: ImageEncodePlan,
+    ) {
+        if (!selector.hasHardwareAv1StillEncoder()) {
+            throw com.snapconverter.engine.HardwareEncoderRequiredException("AVIF/AV1 still")
+        }
+        encodeStillViaSurface(input, plan) {
+            AvifWriter.Builder(
+                outputPfd.fileDescriptor,
+                plan.width,
+                plan.height,
+                AvifWriter.INPUT_MODE_SURFACE,
+            )
+                .setQuality(plan.quality)
+                .setMaxImages(1)
+                .setGridEnabled(false)
+                .setEncoderPreference(hardwareOnlyPreference(plan))
+                .build()
+                .let { writer -> StillWriterSession.of(writer) }
+        }
+    }
+
+    private fun hardwareOnlyPreference(plan: ImageEncodePlan): EncoderPreference =
+        EncoderPreference.Builder()
+            .setEncoderType(EncoderPreference.HARDWARE_ENCODER_ONLY)
+            .setBitrateMode(
+                if (plan.requireConstantQuality) {
+                    EncoderPreference.CONSTANT_QUALITY_MODE_ONLY
+                } else {
+                    EncoderPreference.CONSTANT_QUALITY_MODE_PREFERRED
+                },
+            )
+            .build()
+
+    /**
+     * Minimal lifecycle adapter shared by HeifWriter and AvifWriter sessions.
+     * The two writers disagree on start/surface ordering in heifwriter
+     * 1.2.0-alpha01, so each adapter owns its own begin() sequence.
+     */
+    private interface StillWriterSession {
+        /** Prepare and start the writer; returns the encoder input Surface. */
+        fun begin(): Surface
+        fun endOfStream(ptsUs: Long)
+        fun awaitStop(timeoutMs: Long)
+        fun close()
+
+        companion object {
+            fun of(writer: HeifWriter) = object : StillWriterSession {
+                override fun begin(): Surface {
+                    // HeifWriter 1.2.0-alpha01 hands out the input surface
+                    // before start(); calling start() first throws
+                    // "Already started" on the subsequent surface query.
+                    val surface = writer.inputSurface
+                    writer.start()
+                    return surface
+                }
+
+                override fun endOfStream(ptsUs: Long) = writer.setInputEndOfStreamTimestamp(ptsUs)
+                override fun awaitStop(timeoutMs: Long) { writer.stop(timeoutMs) }
+                override fun close() = writer.close()
+            }
+
+            fun of(writer: AvifWriter) = object : StillWriterSession {
+                override fun begin(): Surface {
+                    writer.start()
+                    return writer.inputSurface
+                }
+
+                override fun endOfStream(ptsUs: Long) = writer.setInputEndOfStreamTimestamp(ptsUs)
+                override fun awaitStop(timeoutMs: Long) { writer.stop(timeoutMs) }
+                override fun close() = writer.close()
+            }
+        }
+    }
+
+    /** Decode → GL texture → draw into the encoder Surface at the plan size. */
+    private fun encodeStillViaSurface(
+        input: Uri,
+        plan: ImageEncodePlan,
+        openSession: () -> StillWriterSession,
+    ) {
+        val bitmap = decodeForGpu(input)
+        var session: StillWriterSession? = null
+        var egl: EglCore? = null
+        var window: WindowSurface? = null
+        var renderer: ImageTextureRenderer? = null
+        try {
+            val surface = openSession().also { session = it }.begin()
             egl = EglCore()
             window = WindowSurface(egl, surface, releaseSurface = false)
             window.makeCurrent()
@@ -121,14 +205,15 @@ class ImageEngine(
             renderer.draw(plan.width, plan.height)
             window.setPresentationTime(0)
             window.swapBuffers()
-            writer.setInputEndOfStreamTimestamp(0)
-            writer.stop(10_000)
+            val active = requireNotNull(session)
+            active.endOfStream(0)
+            active.awaitStop(10_000)
         } finally {
             runCatching { renderer?.release() }
             runCatching { window?.release() }
             runCatching { egl?.makeNothingCurrent() }
             runCatching { egl?.release() }
-            runCatching { writer?.close() }
+            runCatching { session?.close() }
             if (!bitmap.isRecycled) bitmap.recycle()
             EGL14.eglReleaseThread()
         }

@@ -39,7 +39,24 @@ class SsimLadderTest {
         ) { bps -> 0.70 + bps / 10_000_000.0 }
         assertTrue(result.metTarget)
         assertTrue(result.bitrateBps in 2_400_000..2_800_000)
-        assertTrue(result.ssim + 1e-6 >= 0.95)
+        assertTrue(result.score + 1e-6 >= 0.95)
+    }
+
+    @Test
+    fun binarySearchPicksLowestBitrateForVmafScale() {
+        // Fake encoder: VMAF = 40 + bitrate/100_000, so 90 needs 5_000_000.
+        val result = SsimLadder.minBitrateForScore(
+            loBps = 200_000,
+            hiBps = 12_000_000,
+            target = 90.0,
+            targetMin = 0.0,
+            targetMax = 100.0,
+            maxIters = 10,
+            minStepBps = 50_000,
+        ) { bps -> 40.0 + bps / 100_000.0 }
+        assertTrue(result.metTarget)
+        assertTrue(result.bitrateBps in 4_800_000..5_400_000)
+        assertTrue(result.score + 1e-6 >= 90.0)
     }
 
     @Test

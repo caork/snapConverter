@@ -15,6 +15,7 @@ import com.snapconverter.engine.ScLog
 import com.snapconverter.engine.codec.CodecCandidate
 import com.snapconverter.engine.codec.HardwareCodecSelector
 import com.snapconverter.engine.gpu.GpuFrameProcessor
+import com.snapconverter.engine.media.VideoColor
 import com.snapconverter.engine.media.VideoGeometry
 import com.snapconverter.engine.policy.VideoEncodePlan
 import com.snapconverter.engine.policy.VideoSourceInfo
@@ -70,17 +71,51 @@ class SurfaceTranscoder(
                 "encoder=${encoder.name} decoder=${decoder.name} " +
                     "coded=${source.width}x${source.height} rot=${source.rotation} " +
                     "encode=${plan.width}x${plan.height}@${plan.frameRate} " +
-                    "br=${plan.bitrateBps} mode=${plan.bitrateMode} vendorKeys=${vendorKeys.size}",
+                    "br=${plan.bitrateBps} mode=${plan.bitrateMode} " +
+                    "hdr=${plan.hdr} xfer=${plan.colorTransfer} profile=${plan.profile} " +
+                    "vendorKeys=${vendorKeys.size}",
             )
 
             gpu = GpuFrameProcessor()
-            gpu.start(encoderSurface)
+            gpu.start(
+                encoderSurface,
+                windowColorspace = when (plan.colorTransfer) {
+                    MediaFormat.COLOR_TRANSFER_ST2084 -> VideoColor.EGL_GL_COLORSPACE_BT2020_PQ_EXT
+                    MediaFormat.COLOR_TRANSFER_HLG -> VideoColor.EGL_GL_COLORSPACE_BT2020_HLG_EXT
+                    else -> null
+                },
+                preferTenBit = plan.hdr,
+            )
             val decoderWidth = inputFormat.getInteger(MediaFormat.KEY_WIDTH)
             val decoderHeight = inputFormat.getInteger(MediaFormat.KEY_HEIGHT)
             gpu.setDefaultBufferSize(decoderWidth, decoderHeight)
 
             decoderCodec = selector.createByName(decoder)
-            decoderCodec.configure(inputFormat, gpu.inputSurfaceForDecoder, null, 0)
+            val decodeFormat = MediaFormat(inputFormat)
+            if (plan.hdr && Build.VERSION.SDK_INT >= 31 && plan.colorTransfer != null) {
+                decodeFormat.setInteger(MediaFormat.KEY_COLOR_TRANSFER_REQUEST, plan.colorTransfer)
+            }
+            plan.colorStandard?.let { key ->
+                if (!decodeFormat.containsKey(MediaFormat.KEY_COLOR_STANDARD)) {
+                    decodeFormat.setInteger(MediaFormat.KEY_COLOR_STANDARD, key)
+                }
+            }
+            plan.colorTransfer?.let { key ->
+                if (!decodeFormat.containsKey(MediaFormat.KEY_COLOR_TRANSFER)) {
+                    decodeFormat.setInteger(MediaFormat.KEY_COLOR_TRANSFER, key)
+                }
+            }
+            plan.colorRange?.let { key ->
+                if (!decodeFormat.containsKey(MediaFormat.KEY_COLOR_RANGE)) {
+                    decodeFormat.setInteger(MediaFormat.KEY_COLOR_RANGE, key)
+                }
+            }
+            try {
+                decoderCodec.configure(decodeFormat, gpu.inputSurfaceForDecoder, null, 0)
+            } catch (t: Exception) {
+                ScLog.w("decoder HDR configure failed, retrying without transfer request", t)
+                decoderCodec.configure(inputFormat, gpu.inputSurfaceForDecoder, null, 0)
+            }
             decoderCodec.start()
 
             muxer = MediaMuxer(outputPfd.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
@@ -215,7 +250,7 @@ class SurfaceTranscoder(
             }
 
             if (muxerStarted && audioExtractor != null && audioTrackIndex >= 0) {
-                copyAudio(audioExtractor, muxer, audioTrackIndex)
+                copyAudio(audioExtractor, muxer, audioTrackIndex, rangeStartUs, rangeEndUs)
             }
             audioExtractor?.release()
             emit(1f)
@@ -258,6 +293,9 @@ class SurfaceTranscoder(
         plan.colorStandard?.let { format.setInteger(MediaFormat.KEY_COLOR_STANDARD, it) }
         plan.colorRange?.let { format.setInteger(MediaFormat.KEY_COLOR_RANGE, it) }
         plan.colorTransfer?.let { format.setInteger(MediaFormat.KEY_COLOR_TRANSFER, it) }
+        plan.hdrStaticInfo?.let { bytes ->
+            format.setByteBuffer(MediaFormat.KEY_HDR_STATIC_INFO, java.nio.ByteBuffer.wrap(bytes))
+        }
         if (Build.VERSION.SDK_INT >= 31) {
             plan.qpIMin?.let { format.setInteger(MediaFormat.KEY_VIDEO_QP_I_MIN, it) }
             plan.qpIMax?.let { format.setInteger(MediaFormat.KEY_VIDEO_QP_I_MAX, it) }
@@ -269,15 +307,32 @@ class SurfaceTranscoder(
         return format
     }
 
-    private fun copyAudio(extractor: MediaExtractor, muxer: MediaMuxer, trackIndex: Int) {
+    /**
+     * Passthrough audio copy honoring the trim window: samples before the
+     * start are skipped, copying stops at the end bound, and PTS are rebased
+     * to zero so audio stays in sync with the re-encoded video track.
+     */
+    private fun copyAudio(
+        extractor: MediaExtractor,
+        muxer: MediaMuxer,
+        trackIndex: Int,
+        rangeStartUs: Long,
+        rangeEndUs: Long,
+    ) {
         val info = MediaCodec.BufferInfo()
         val buffer = ByteBuffer.allocate(64 * 1024)
         while (true) {
             val size = extractor.readSampleData(buffer, 0)
             if (size < 0) break
+            val pts = extractor.sampleTime
+            if (pts >= 0L && pts < rangeStartUs) {
+                extractor.advance()
+                continue
+            }
+            if (rangeEndUs > 0L && pts >= rangeEndUs) break
             info.offset = 0
             info.size = size
-            info.presentationTimeUs = extractor.sampleTime
+            info.presentationTimeUs = (pts - rangeStartUs).coerceAtLeast(0L)
             info.flags = extractor.sampleFlags
             muxer.writeSampleData(trackIndex, buffer, info)
             extractor.advance()

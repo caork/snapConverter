@@ -6,16 +6,21 @@ import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import java.io.FileInputStream
+import com.snapconverter.engine.HdrEncodeUnavailableException
+import com.snapconverter.engine.codec.CodecCandidate
 import com.snapconverter.engine.codec.HardwareCodecSelector
 import com.snapconverter.engine.ScLog
 import com.snapconverter.engine.media.CaptureTimestamp
+import com.snapconverter.engine.media.Mp4ColorProbe
+import com.snapconverter.engine.media.VideoColor
 import com.snapconverter.engine.media.VideoGeometry
 import com.snapconverter.engine.policy.BitrateModeOption
 import com.snapconverter.engine.policy.CompressionMode
 import com.snapconverter.engine.policy.CompressionPolicy
 import com.snapconverter.engine.policy.CompressionRequest
+import com.snapconverter.engine.policy.OutputVideoCodec
 import com.snapconverter.engine.policy.VideoSourceInfo
-import com.snapconverter.engine.progress.EncodeProgress
 import com.snapconverter.engine.progress.EncodeProgressListener
 import com.snapconverter.engine.quality.QualityAnalyzer
 
@@ -25,7 +30,8 @@ class VideoEngine(
     private val policy: CompressionPolicy = CompressionPolicy(),
 ) {
     private val quality = QualityAnalyzer(context, selector)
-    private val ssimCalibrator = SsimTargetCalibrator(context, selector, policy, quality)
+    private val qualityCalibrator = QualityTargetCalibrator(context, selector, policy, quality)
+
     fun inspect(uri: Uri): VideoSourceInfo {
         val extractor = MediaExtractor()
         val retriever = MediaMetadataRetriever()
@@ -41,9 +47,7 @@ class VideoEngine(
             var durationUs = 0L
             var audioMime: String? = null
             var audioBitrate = 0
-            var colorStandard: Int? = null
-            var colorRange: Int? = null
-            var colorTransfer: Int? = null
+            var color = VideoColor()
             for (i in 0 until extractor.trackCount) {
                 val format = extractor.getTrackFormat(i)
                 val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
@@ -66,9 +70,7 @@ class VideoEngine(
                     if (format.containsKey(MediaFormat.KEY_DURATION)) {
                         durationUs = format.getLong(MediaFormat.KEY_DURATION)
                     }
-                    colorStandard = formatIntOrNull(format, MediaFormat.KEY_COLOR_STANDARD)
-                    colorRange = formatIntOrNull(format, MediaFormat.KEY_COLOR_RANGE)
-                    colorTransfer = formatIntOrNull(format, MediaFormat.KEY_COLOR_TRANSFER)
+                    color = VideoColor.from(format, mime)
                 } else if (mime.startsWith("audio/")) {
                     audioMime = mime
                     if (format.containsKey(MediaFormat.KEY_BIT_RATE)) {
@@ -109,6 +111,18 @@ class VideoEngine(
             if (bitrate == 0) {
                 bitrate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull() ?: 0
             }
+            color = VideoColor.merge(color, VideoColor.from(retriever))
+            runCatching {
+                context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                    FileInputStream(pfd.fileDescriptor).use { stream ->
+                        color = VideoColor.merge(Mp4ColorProbe.probe(stream), color)
+                    }
+                }
+            }
+            ScLog.i(
+                "inspect color std=${color.standard} xfer=${color.transfer} " +
+                    "range=${color.range} tenBit=${color.tenBit} hdr=${color.isHdr} ${color.label}",
+            )
             val identity = CaptureTimestamp.read(context, uri, videoMime)
             return VideoSourceInfo(
                 width = width,
@@ -123,9 +137,11 @@ class VideoEngine(
                 displayName = identity.displayName,
                 fileSizeBytes = identity.fileSizeBytes,
                 captureTimeMs = identity.captureTimeMs,
-                colorStandard = colorStandard,
-                colorRange = colorRange,
-                colorTransfer = colorTransfer,
+                colorStandard = color.standard,
+                colorRange = color.range,
+                colorTransfer = color.transfer,
+                hdrStaticInfo = color.hdrStaticInfo,
+                tenBit = color.tenBit,
             )
         } finally {
             extractor.release()
@@ -162,29 +178,28 @@ class VideoEngine(
         progress: EncodeProgressListener? = null,
     ) {
         val source = inspect(input)
+        if (source.isHdr && request.videoCodec == OutputVideoCodec.AVC) {
+            throw HdrEncodeUnavailableException("H.264 cannot carry HDR. Choose H.265.")
+        }
+        if (request.trimEndUs > 0L && request.trimStartUs >= request.trimEndUs) {
+            throw IllegalArgumentException("裁剪范围为空：终点必须大于起点。")
+        }
+        // Bitrate / target-size planning must run on the trimmed duration,
+        // otherwise the estimator assumes the full-length clip.
+        val planningSource = if (request.trims) {
+            source.copy(durationUs = request.clipDurationUs(source.durationUs))
+        } else {
+            source
+        }
         val decoder = selector.selectDecoder(source.mime)
         val encoder = selector.selectPreferredVideoEncoder(
-            preferredMimes = policy.preferredMimes(request.videoCodec),
+            preferredMimes = policy.preferredMimes(request.videoCodec, hdr = source.isHdr),
             width = source.displayWidth,
             height = source.displayHeight,
         )
-        val resolved = if (request.mode == CompressionMode.TARGET_SSIM) {
-            val found = ssimCalibrator.calibrate(
-                input, source, decoder, encoder, request, progress,
-            )
-            request.copy(
-                targetBitrateBps = found.bitrateBps,
-                bitrateMode = when (request.bitrateMode) {
-                    BitrateModeOption.AUTO -> BitrateModeOption.VBR
-                    else -> request.bitrateMode
-                },
-                maxBitrateBps = (found.bitrateBps * 1.35).toInt(),
-            )
-        } else {
-            request
-        }
-        val plan = policy.planVideo(source, resolved, encoder)
-        val encodeProgress = if (request.mode == CompressionMode.TARGET_SSIM) {
+        val resolved = resolveMetricTarget(input, planningSource, decoder, encoder, request, progress)
+        val plan = policy.planVideo(planningSource, resolved, encoder)
+        val encodeProgress = if (isMetricTarget(request.mode)) {
             EncodeProgressListener { update ->
                 progress?.onProgress(
                     update.copy(
@@ -204,6 +219,42 @@ class VideoEngine(
             encoder = encoder,
             plan = plan,
             progress = encodeProgress,
+            rangeStartUs = request.trimStartUs.coerceAtLeast(0L),
+            rangeEndUs = request.trimEndUs,
+            copyAudio = !request.muteAudio,
         )
     }
+
+    private fun resolveMetricTarget(
+        input: Uri,
+        source: VideoSourceInfo,
+        decoder: CodecCandidate,
+        encoder: CodecCandidate,
+        request: CompressionRequest,
+        progress: EncodeProgressListener?,
+    ): CompressionRequest {
+        val metric = when (request.mode) {
+            CompressionMode.TARGET_SSIM -> QualityTargetMetric.SSIM
+            CompressionMode.TARGET_VMAF -> QualityTargetMetric.VMAF
+            else -> return request
+        }
+        val target = when (metric) {
+            QualityTargetMetric.SSIM -> request.targetSsim
+            QualityTargetMetric.VMAF -> request.targetVmaf
+        }
+        val found = qualityCalibrator.calibrate(
+            input, source, decoder, encoder, request, metric, target, progress,
+        )
+        return request.copy(
+            targetBitrateBps = found.bitrateBps,
+            bitrateMode = when (request.bitrateMode) {
+                BitrateModeOption.AUTO -> BitrateModeOption.VBR
+                else -> request.bitrateMode
+            },
+            maxBitrateBps = (found.bitrateBps * 1.35).toInt(),
+        )
+    }
+
+    private fun isMetricTarget(mode: CompressionMode): Boolean =
+        mode == CompressionMode.TARGET_SSIM || mode == CompressionMode.TARGET_VMAF
 }

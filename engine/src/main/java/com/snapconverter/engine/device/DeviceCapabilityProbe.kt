@@ -4,6 +4,7 @@ import android.os.Build
 import com.snapconverter.engine.codec.HardwareCodecSelector
 import com.snapconverter.engine.codec.MimeTypes
 import com.snapconverter.engine.codec.VendorFamily
+import com.snapconverter.engine.quality.VmafNative
 
 class DeviceCapabilityProbe(
     private val selector: HardwareCodecSelector = HardwareCodecSelector(
@@ -43,6 +44,9 @@ class DeviceCapabilityProbe(
             if (videoEnc.none { it.mime.equals(MimeTypes.AV1, true) }) {
                 add("No hardware AV1 encoder. AV1 output is hidden.")
             }
+            if (!VmafNative.available) {
+                add("Native VMAF is not loaded. Target VMAF is disabled.")
+            }
         }
 
         return DeviceCapabilityReport(
@@ -63,6 +67,7 @@ class DeviceCapabilityProbe(
             encoders = videoEnc + encoders.filter { it.mime.startsWith("image/") },
             decoders = videoDec,
             jpegEncoderName = jpeg?.name,
+            vmafAvailable = VmafNative.available,
             notes = notes,
         )
     }

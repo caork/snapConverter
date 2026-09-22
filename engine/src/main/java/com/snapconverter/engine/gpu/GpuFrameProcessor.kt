@@ -21,8 +21,12 @@ class GpuFrameProcessor {
     val inputSurfaceForDecoder: Surface
         get() = decoderSurface ?: error("GpuFrameProcessor not started")
 
-    fun start(encoderInputSurface: Surface) {
-        val core = EglCore()
+    fun start(
+        encoderInputSurface: Surface,
+        windowColorspace: Int? = null,
+        preferTenBit: Boolean = false,
+    ) {
+        val core = EglCore(windowColorspace = windowColorspace, preferTenBit = preferTenBit)
         eglCore = core
         val win = WindowSurface(core, encoderInputSurface, releaseSurface = false)
         window = win

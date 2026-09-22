@@ -1,14 +1,15 @@
 package com.snapconverter.engine.policy
 
+import com.snapconverter.engine.media.VideoColor
 import com.snapconverter.engine.media.VideoGeometry
 
 enum class MediaKind { VIDEO, IMAGE }
 
-enum class CompressionMode { QUALITY, TARGET_SIZE, TARGET_BITRATE, TARGET_SSIM, LOSSLESS_REMUX }
+enum class CompressionMode { QUALITY, TARGET_SIZE, TARGET_BITRATE, TARGET_SSIM, TARGET_VMAF, LOSSLESS_REMUX }
 
 enum class OutputVideoCodec { HEVC, AVC, AV1 }
 
-enum class OutputImageCodec { HEIC, JPEG }
+enum class OutputImageCodec { HEIC, AVIF, JPEG }
 
 enum class OutputResolution {
     ORIGINAL,
@@ -47,10 +48,16 @@ data class VideoSourceInfo(
     val colorStandard: Int? = null,
     val colorRange: Int? = null,
     val colorTransfer: Int? = null,
+    val hdrStaticInfo: ByteArray? = null,
+    val tenBit: Boolean = false,
 ) {
     val displayWidth: Int get() = VideoGeometry.displayWidth(width, height, rotation)
     val displayHeight: Int get() = VideoGeometry.displayHeight(width, height, rotation)
     val isPortrait: Boolean get() = displayHeight > displayWidth
+    val color: VideoColor
+        get() = VideoColor(colorStandard, colorTransfer, colorRange, hdrStaticInfo, tenBit)
+    val isHdr: Boolean get() = color.isHdr
+    val hdrLabel: String get() = color.label
 }
 
 data class ImageSourceInfo(
@@ -84,7 +91,30 @@ data class CompressionRequest(
     val qpPMin: Int? = null,
     val qpPMax: Int? = null,
     val targetSsim: Double = 0.95,
-)
+    val targetVmaf: Double = 90.0,
+    /** Precise trim window applied on the hardware transcode path. 0 = from start. */
+    val trimStartUs: Long = 0L,
+    /** -1 = to source end. Otherwise exclusive upper bound in microseconds. */
+    val trimEndUs: Long = -1L,
+    /** Drop the audio track entirely (video-only output). */
+    val muteAudio: Boolean = false,
+    /** Photoshop-style explicit image output size; overrides [resolution] for images. */
+    val imageCustomWidth: Int? = null,
+    val imageCustomHeight: Int? = null,
+) {
+    /**
+     * Effective clip length after trimming, clamped to the source duration.
+     * Planning (target-size bitrate math) must use this, not the raw duration.
+     */
+    fun clipDurationUs(sourceDurationUs: Long): Long {
+        val start = trimStartUs.coerceIn(0L, sourceDurationUs)
+        val end = if (trimEndUs > 0L) minOf(trimEndUs, sourceDurationUs) else sourceDurationUs
+        return (end - start).coerceAtLeast(1L)
+    }
+
+    /** True when a non-empty trim window is requested. */
+    val trims: Boolean get() = trimStartUs > 0L || trimEndUs > 0L
+}
 
 data class VideoEncodePlan(
     val mime: String,
@@ -111,6 +141,8 @@ data class VideoEncodePlan(
     val colorStandard: Int? = null,
     val colorRange: Int? = null,
     val colorTransfer: Int? = null,
+    val hdrStaticInfo: ByteArray? = null,
+    val hdr: Boolean = false,
 )
 
 data class ImageEncodePlan(

@@ -184,7 +184,7 @@ class TextureRenderer {
 
         private const val FRAGMENT = """
             #extension GL_OES_EGL_image_external : require
-            precision mediump float;
+            precision highp float;
             varying vec2 vTextureCoord;
             uniform samplerExternalOES sTexture;
             void main() {

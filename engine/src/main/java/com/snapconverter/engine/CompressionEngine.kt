@@ -3,6 +3,7 @@ package com.snapconverter.engine
 import android.content.Context
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import com.snapconverter.engine.audio.AudioExtractor
 import com.snapconverter.engine.codec.HardwareCodecSelector
 import com.snapconverter.engine.device.DeviceCapabilityProbe
 import com.snapconverter.engine.device.DeviceCapabilityReport
@@ -29,6 +30,7 @@ class CompressionEngine(
     private val video = VideoEngine(appContext, selector)
     private val image = ImageEngine(appContext, selector)
     private val quality = QualityAnalyzer(appContext, selector)
+    private val audio = AudioExtractor(appContext)
 
     fun probeDevice(): DeviceCapabilityReport = probe.probe()
 
@@ -59,6 +61,17 @@ class CompressionEngine(
             }
         }
     }
+
+    /**
+     * Passthrough audio extraction (Extractor -> Muxer, M4A). No codec is
+     * involved, so this is deliberately NOT gated on Qualcomm encoder
+     * availability — the hardware-first rule concerns encode paths.
+     */
+    fun extractAudio(
+        input: Uri,
+        outputPfd: ParcelFileDescriptor,
+        progress: EncodeProgressListener? = null,
+    ): Long = audio.extract(input, outputPfd, progress)
 
     fun compareQuality(
         kind: MediaKind,

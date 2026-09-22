@@ -8,8 +8,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import com.snapconverter.app.ui.JobViewModel
 import com.snapconverter.app.ui.screens.HomeScreen
+import com.snapconverter.app.ui.settings.AppSettings
 import com.snapconverter.app.ui.theme.SnapConverterTheme
 
 class MainActivity : ComponentActivity() {
@@ -19,8 +24,18 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            SnapConverterTheme {
-                HomeScreen(viewModel)
+            var settings by remember { mutableStateOf(AppSettings.load(this@MainActivity)) }
+            SnapConverterTheme(
+                themeMode = settings.themeMode,
+                dynamicColor = settings.dynamicColor,
+                oledBlack = settings.oledBlack,
+                glassPreset = settings.glassPreset,
+            ) {
+                HomeScreen(
+                    viewModel = viewModel,
+                    settings = settings,
+                    onSettingsChange = { settings = it },
+                )
             }
         }
         handleIncoming(intent)

@@ -28,3 +28,13 @@ class JpegHardwareUnavailableException :
 
 class SoftwareCodecRejectedException(codecName: String) :
     HardwareOnlyException("Rejected software / AOSP codec: $codecName")
+
+class VmafUnavailableException :
+    HardwareOnlyException(
+        "Native VMAF is not available on this build. Target VMAF requires libvmaf.",
+    )
+
+class HdrEncodeUnavailableException(detail: String) :
+    HardwareOnlyException(
+        "HDR in → HDR out is not available. $detail",
+    )
