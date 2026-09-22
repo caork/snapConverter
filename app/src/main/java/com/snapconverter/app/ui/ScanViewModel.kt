@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.snapconverter.app.SnapConverterApp
 import com.snapconverter.app.media.MediaOutputWriter
+import com.snapconverter.app.scan.FolderSummary
 import com.snapconverter.app.scan.MediaLibraryScanner
 import com.snapconverter.app.scan.ScanItem
 import com.snapconverter.app.scan.ScanReport
@@ -57,6 +58,38 @@ data class BatchSettings(
     val saveFolder: SaveFolder = SaveFolder.APP,
 )
 
+/**
+ * Date window over the findings. The reference point is the moment the scan
+ * ran, not "now", so the list cannot shift under the user while they pick.
+ */
+enum class TimeFilter(val label: String, val detail: String? = null) {
+    ALL("全部时间"),
+    LAST_30_DAYS("近 30 天"),
+    LAST_YEAR("近一年"),
+    OLDER_THAN_YEAR("一年以前", "适合先压存量"),
+    OLDER_THAN_3_YEARS("三年以前", "最少改动近期文件"),
+    ;
+
+    fun accepts(modifiedSec: Long, nowSec: Long): Boolean {
+        if (this == ALL) return true
+        // An undated row cannot be placed in a window, so it stays out of
+        // every window rather than being guessed into one.
+        if (modifiedSec <= 0L || nowSec <= 0L) return false
+        val age = nowSec - modifiedSec
+        return when (this) {
+            ALL -> true
+            LAST_30_DAYS -> age <= 30 * DAY
+            LAST_YEAR -> age <= 365 * DAY
+            OLDER_THAN_YEAR -> age > 365 * DAY
+            OLDER_THAN_3_YEARS -> age > 3 * 365 * DAY
+        }
+    }
+
+    private companion object {
+        const val DAY = 24L * 60 * 60
+    }
+}
+
 data class ScanUiState(
     val stage: ScanStage = ScanStage.IDLE,
     val capabilities: DeviceCapabilityReport? = null,
@@ -65,11 +98,30 @@ data class ScanUiState(
     val scannedRows: Int = 0,
     val foundSoFar: Int = 0,
     val report: ScanReport? = null,
+    /** Bucket ids to keep; empty means every folder. */
+    val folderFilter: Set<Long> = emptySet(),
+    val timeFilter: TimeFilter = TimeFilter.ALL,
     val selected: Set<Long> = emptySet(),
     val jobs: List<BatchJob> = emptyList(),
     val error: String? = null,
 ) {
-    val items: List<ScanItem> get() = report?.items.orEmpty()
+    /** Everything the scan flagged, before the filters. */
+    val allItems: List<ScanItem> get() = report?.items.orEmpty()
+
+    val folders: List<FolderSummary> get() = report?.folders.orEmpty()
+
+    val filtersActive: Boolean
+        get() = folderFilter.isNotEmpty() || timeFilter != TimeFilter.ALL
+
+    fun visible(item: ScanItem): Boolean {
+        if (folderFilter.isNotEmpty() && item.bucketId !in folderFilter) return false
+        return timeFilter.accepts(item.modifiedSec, report?.scannedAtSec ?: 0L)
+    }
+
+    /** What the list shows and what every selection action operates on. */
+    val items: List<ScanItem> get() = allItems.filter { visible(it) }
+
+    val filteredSavingBytes: Long get() = items.sumOf { it.audit.savingBytes }
 
     val selectedItems: List<ScanItem> get() = items.filter { it.id in selected }
 
@@ -151,14 +203,21 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             result.onSuccess { report ->
-                _state.update {
-                    it.copy(
+                _state.update { current ->
+                    val buckets = report.folders.map { it.bucketId }.toSet()
+                    val next = current.copy(
                         stage = ScanStage.RESULT,
                         report = report,
                         scannedRows = report.scanned,
                         foundSoFar = report.items.size,
-                        // Pre-select the clear wins; "high" is left to the user.
-                        selected = report.items
+                        // A folder that no longer holds findings drops out of
+                        // the filter instead of silently emptying the list.
+                        folderFilter = current.folderFilter intersect buckets,
+                    )
+                    // Pre-select the clear wins among the visible files;
+                    // "high" is left to the user.
+                    next.copy(
+                        selected = next.items
                             .filter { item -> item.audit.verdict == AuditVerdict.VERY_HIGH }
                             .map { item -> item.id }
                             .toSet(),
@@ -184,6 +243,34 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setSettings(settings: BatchSettings) = _state.update { it.copy(settings = settings) }
+
+    /**
+     * Filters change what the list shows, so anything they hide also leaves the
+     * selection — a file the user can no longer see must not be converted by a
+     * button that counts files they can.
+     */
+    fun toggleFolder(bucketId: Long) = _state.update { state ->
+        val all = state.folders.map { it.bucketId }.toSet()
+        val current = state.folderFilter.ifEmpty { all }
+        val next = if (bucketId in current) current - bucketId else current + bucketId
+        state.withFilter(folderFilter = if (next == all) emptySet() else next)
+    }
+
+    fun selectAllFolders() = _state.update { it.withFilter(folderFilter = emptySet()) }
+
+    fun selectOnlyFolder(bucketId: Long) =
+        _state.update { it.withFilter(folderFilter = setOf(bucketId)) }
+
+    fun setTimeFilter(filter: TimeFilter) = _state.update { it.withFilter(timeFilter = filter) }
+
+    private fun ScanUiState.withFilter(
+        folderFilter: Set<Long> = this.folderFilter,
+        timeFilter: TimeFilter = this.timeFilter,
+    ): ScanUiState {
+        val next = copy(folderFilter = folderFilter, timeFilter = timeFilter)
+        val visible = next.items.map { it.id }.toSet()
+        return next.copy(selected = next.selected intersect visible)
+    }
 
     fun toggle(id: Long) = _state.update {
         it.copy(selected = if (id in it.selected) it.selected - id else it.selected + id)

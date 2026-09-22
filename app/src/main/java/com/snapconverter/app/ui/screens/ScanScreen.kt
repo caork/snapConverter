@@ -30,12 +30,14 @@ import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.FilterAlt
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Savings
+import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
@@ -60,6 +62,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.Image as ImageContent
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.snapconverter.app.scan.FolderSummary
 import com.snapconverter.app.scan.ScanItem
 import com.snapconverter.app.ui.BatchJob
 import com.snapconverter.app.ui.BatchJobState
@@ -68,6 +71,7 @@ import com.snapconverter.app.ui.SaveFolder
 import com.snapconverter.app.ui.ScanStage
 import com.snapconverter.app.ui.ScanUiState
 import com.snapconverter.app.ui.ScanViewModel
+import com.snapconverter.app.ui.TimeFilter
 import com.snapconverter.app.ui.components.BarIconButton
 import com.snapconverter.app.ui.components.CardDivider
 import com.snapconverter.app.ui.components.CardHeader
@@ -84,6 +88,10 @@ import com.snapconverter.app.ui.components.Ios27LazyScreen
 import com.snapconverter.app.ui.components.Ios27Sheet
 import com.snapconverter.app.ui.components.IosProgressBar
 import com.snapconverter.app.ui.components.MetricTile
+import com.snapconverter.app.ui.components.ParamPill
+import com.snapconverter.app.ui.components.PickerOption
+import com.snapconverter.app.ui.components.PickerSheet
+import com.snapconverter.app.ui.components.PillRow
 import com.snapconverter.app.ui.components.Segment
 import com.snapconverter.app.ui.components.SegmentedControl
 import com.snapconverter.app.ui.components.SwitchRow
@@ -118,7 +126,7 @@ fun ScanScreen(viewModel: ScanViewModel, onBack: () -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var granted by remember { mutableStateOf(hasMediaAccess(context)) }
-    var settingsOpen by remember { mutableStateOf(false) }
+    var sheet by remember { mutableStateOf(ScanSheet.None) }
     var confirmBatch by remember { mutableStateOf(false) }
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -135,7 +143,7 @@ fun ScanScreen(viewModel: ScanViewModel, onBack: () -> Unit) {
         trailing = {
             if (state.stage == ScanStage.RESULT) {
                 BarIconButton(icon = Icons.Rounded.Tune, contentDescription = "转换设置") {
-                    settingsOpen = true
+                    sheet = ScanSheet.Settings
                 }
             }
         },
@@ -146,7 +154,7 @@ fun ScanScreen(viewModel: ScanViewModel, onBack: () -> Unit) {
             vm = viewModel,
             onBack = onBack,
             onStartBatch = {
-                if (state.selected.size > CONFIRM_ABOVE) {
+                if (state.selectedItems.size > CONFIRM_ABOVE) {
                     confirmBatch = true
                 } else {
                     viewModel.startBatch()
@@ -170,7 +178,13 @@ fun ScanScreen(viewModel: ScanViewModel, onBack: () -> Unit) {
                         Spacer(Modifier.height(14.dp))
                         SensitivityCard(state) { viewModel.setSensitivity(it) }
                         Spacer(Modifier.height(14.dp))
-                        SettingsCard(state) { settingsOpen = true }
+                        FilterCard(
+                            state = state,
+                            onOpenFolders = { sheet = ScanSheet.Folders },
+                            onOpenTime = { sheet = ScanSheet.Time },
+                        )
+                        Spacer(Modifier.height(14.dp))
+                        SettingsCard(state) { sheet = ScanSheet.Settings }
                         Spacer(Modifier.height(14.dp))
                         SelectionBar(state, viewModel)
                     }
@@ -195,12 +209,26 @@ fun ScanScreen(viewModel: ScanViewModel, onBack: () -> Unit) {
         }
     }
 
-    if (settingsOpen) {
-        BatchSettingsSheet(
+    when (sheet) {
+        ScanSheet.Settings -> BatchSettingsSheet(
             state = state,
             onChange = { viewModel.setSettings(it) },
-            onDismiss = { settingsOpen = false },
+            onDismiss = { sheet = ScanSheet.None },
         )
+        ScanSheet.Folders -> FolderFilterSheet(
+            state = state,
+            vm = viewModel,
+            onDismiss = { sheet = ScanSheet.None },
+        )
+        ScanSheet.Time -> PickerSheet(
+            title = "时间范围",
+            options = TimeFilter.entries.map { PickerOption(it, it.label, it.detail) },
+            selected = state.timeFilter,
+            onSelect = { viewModel.setTimeFilter(it) },
+            onDismiss = { sheet = ScanSheet.None },
+            footer = "按文件的修改时间筛选，基准是这次扫描的时刻。",
+        )
+        ScanSheet.None -> Unit
     }
 
     // A library-sized batch runs for hours and writes a new file per item, so
@@ -208,7 +236,7 @@ fun ScanScreen(viewModel: ScanViewModel, onBack: () -> Unit) {
     if (confirmBatch) {
         AlertDialog(
             onDismissRequest = { confirmBatch = false },
-            title = { Text("转换 " + state.selected.size + " 个文件") },
+            title = { Text("转换 " + state.selectedItems.size + " 个文件") },
             text = {
                 Text(
                     "将逐个转换，新增约 " +
@@ -233,6 +261,8 @@ fun ScanScreen(viewModel: ScanViewModel, onBack: () -> Unit) {
 
 /** Above this many files, a batch asks before it starts. */
 private const val CONFIRM_ABOVE = 20
+
+private enum class ScanSheet { None, Settings, Folders, Time }
 
 /** List rows keep the card stack's 16pt margin without nesting a Column. */
 @Composable
@@ -283,7 +313,7 @@ private fun bottomBar(
     }
     state.stage == ScanStage.RESULT -> {
         {
-            val count = state.selected.size
+            val count = state.selectedItems.size
             FilledButton(
                 text = if (count == 0) {
                     "选择要转换的文件"
@@ -403,14 +433,19 @@ private fun SummaryCard(state: ScanUiState) {
             title = state.items.size.toString() + " 个文件可以压缩",
             icon = Icons.Rounded.Savings,
             tone = if (state.items.isEmpty()) TileTone.Green else TileTone.Yellow,
-            subtitle = report.scanned.toString() + " 个文件 · 用时 " +
-                formatElapsed(report.elapsedMs) +
-                if (report.skipped > 0) " · " + report.skipped + " 个缺少索引信息" else "",
+            subtitle = if (state.filtersActive) {
+                "筛选自 " + state.allItems.size + " 项 · 全库 " + report.scanned +
+                    " 个文件 · 用时 " + formatElapsed(report.elapsedMs)
+            } else {
+                report.scanned.toString() + " 个文件 · 用时 " +
+                    formatElapsed(report.elapsedMs) +
+                    if (report.skipped > 0) " · " + report.skipped + " 个缺少索引信息" else ""
+            },
         )
         Spacer(Modifier.height(Ios27Spacing.lg))
         Row(horizontalArrangement = Arrangement.spacedBy(Ios27Spacing.sm)) {
             MetricTile(
-                value = formatSize(report.totalSavingBytes),
+                value = formatSize(state.filteredSavingBytes),
                 label = "预计可省",
                 emphasized = true,
                 modifier = Modifier.weight(1f),
@@ -471,6 +506,132 @@ private fun sensitivityHint(sensitivity: AuditSensitivity): String = when (sensi
     AuditSensitivity.STRICT -> "纳入更小、超标更少的文件，长边超过 3200 就算尺寸过大。"
 }
 
+/**
+ * Folder and date filters.
+ *
+ * They apply to the scan's result, not to the query: the scan itself is a few
+ * hundred milliseconds, so keeping every finding in memory and filtering the
+ * view makes switching folders instant and lets the folder list state what
+ * each one is worth.
+ */
+@Composable
+private fun FilterCard(
+    state: ScanUiState,
+    onOpenFolders: () -> Unit,
+    onOpenTime: () -> Unit,
+) {
+    val palette = LocalIos27Palette.current
+    ContentCard {
+        CardHeader(
+            title = "筛选范围",
+            icon = Icons.Rounded.FilterAlt,
+            tone = if (state.filtersActive) TileTone.Brand else TileTone.Neutral,
+            subtitle = if (state.filtersActive) {
+                state.items.size.toString() + " / " + state.allItems.size + " 项在范围内"
+            } else {
+                "共 " + state.folders.size + " 个文件夹 · 不限时间"
+            },
+        )
+        Spacer(Modifier.height(Ios27Spacing.md))
+        PillRow {
+            ParamPill(
+                label = "文件夹",
+                value = folderFilterValue(state),
+                icon = Icons.Rounded.FolderOpen,
+                tone = TileTone.Yellow,
+                modifier = Modifier.weight(1f),
+                onClick = onOpenFolders,
+            )
+            ParamPill(
+                label = "时间",
+                value = state.timeFilter.label,
+                icon = Icons.Rounded.Schedule,
+                modifier = Modifier.weight(1f),
+                onClick = onOpenTime,
+            )
+        }
+        if (state.filtersActive && state.items.isEmpty()) {
+            Spacer(Modifier.height(Ios27Spacing.md))
+            Text(
+                text = "当前筛选范围内没有文件。",
+                style = Ios27Type.footnote,
+                color = palette.labelSecondary,
+            )
+        }
+    }
+}
+
+private fun folderFilterValue(state: ScanUiState): String {
+    if (state.folderFilter.isEmpty()) return "全部"
+    if (state.folderFilter.size == 1) {
+        val one = state.folders.firstOrNull { it.bucketId in state.folderFilter }
+        return one?.name?.substringAfterLast('/') ?: "1 个"
+    }
+    return state.folderFilter.size.toString() + " 个"
+}
+
+/** Multi-select over the folders that actually hold findings. */
+@Composable
+private fun FolderFilterSheet(state: ScanUiState, vm: ScanViewModel, onDismiss: () -> Unit) {
+    val palette = LocalIos27Palette.current
+    val all = state.folderFilter.isEmpty()
+    val allIds = state.folders.map { it.bucketId }.toSet()
+    Ios27Sheet(title = "文件夹", onDismiss = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Ios27Spacing.margin),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            ContentCard {
+                Text(
+                    text = "只有含可压缩文件的文件夹会列出。取消勾选 DCIM，" +
+                        "就能把相机原片留给另一批不同设置的转换。",
+                    style = Ios27Type.footnote,
+                    color = palette.labelSecondary,
+                )
+                Spacer(Modifier.height(Ios27Spacing.md))
+                ChipFlow {
+                    Chip(label = "全选", selected = all) { vm.selectAllFolders() }
+                    Chip(label = "全不选", selected = false) {
+                        // Clearing every folder would show nothing, so the
+                        // "none" shortcut keeps the biggest folder selected.
+                        state.folders.firstOrNull()?.let { vm.selectOnlyFolder(it.bucketId) }
+                    }
+                }
+            }
+            InsetGroup(footer = "共 " + state.allItems.size + " 项 · " + state.folders.size + " 个文件夹") {
+                state.folders.forEach { folder ->
+                    row {
+                        CheckRow(
+                            title = folder.name,
+                            subtitle = folderDetail(folder),
+                            selected = all || folder.bucketId in state.folderFilter,
+                            onClick = { vm.toggleFolder(folder.bucketId) },
+                        )
+                    }
+                }
+            }
+            if (state.folders.isEmpty()) {
+                ContentCard {
+                    Text(
+                        text = "这次扫描没有发现可压缩的文件。",
+                        style = Ios27Type.footnote,
+                        color = palette.labelSecondary,
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun folderDetail(folder: FolderSummary): String = buildList {
+    add(folder.count.toString() + " 项")
+    if (folder.videos > 0) add(folder.videos.toString() + " 视频")
+    if (folder.images > 0) add(folder.images.toString() + " 照片")
+    add("可省 " + formatSize(folder.savingBytes))
+}.joinToString(" · ")
+
 /** The batch settings, summarised where the user is about to press Convert. */
 @Composable
 private fun SettingsCard(state: ScanUiState, onOpen: () -> Unit) {
@@ -506,7 +667,7 @@ private fun SelectionBar(state: ScanUiState, vm: ScanViewModel) {
     ContentCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = "已选 " + state.selected.size + " / " + state.items.size,
+                text = "已选 " + state.selectedItems.size + " / " + state.items.size,
                 style = Ios27Type.headline,
                 color = palette.label,
                 modifier = Modifier.weight(1f),

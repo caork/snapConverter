@@ -25,11 +25,25 @@ data class ScanItem(
     val durationMs: Long,
     val mime: String,
     val modifiedSec: Long,
+    /** MediaStore's album id — the folder this file sits in. */
+    val bucketId: Long,
+    val folder: String,
     val audit: AuditResult,
 ) {
     val fact: MediaFact
         get() = MediaFact(kind, width, height, sizeBytes, durationMs, mime)
 }
+
+/** One folder's share of the findings, for the folder filter. */
+data class FolderSummary(
+    val bucketId: Long,
+    val name: String,
+    val count: Int,
+    val videos: Int,
+    val images: Int,
+    val sizeBytes: Long,
+    val savingBytes: Long,
+)
 
 data class ScanReport(
     val items: List<ScanItem>,
@@ -40,6 +54,10 @@ data class ScanReport(
     /** Rows MediaStore could not describe well enough to judge. */
     val skipped: Int,
     val elapsedMs: Long,
+    /** Folders that hold at least one flagged file, biggest win first. */
+    val folders: List<FolderSummary> = emptyList(),
+    /** Wall clock when the scan ran; the date filter measures from here. */
+    val scannedAtSec: Long = 0L,
 ) {
     val totalSizeBytes: Long get() = items.sumOf { it.sizeBytes }
     val totalSavingBytes: Long get() = items.sumOf { it.audit.savingBytes }
@@ -49,9 +67,9 @@ data class ScanReport(
  * Finds the files in the user's library that are larger than they need to be.
  *
  * Speed comes from what this does *not* do: MediaStore already indexes width,
- * height, duration, size and mime for every item, so the whole library is two
- * cursor walks with a five-column projection and no file ever gets opened —
- * no `MediaMetadataRetriever`, no decode, no thumbnail. Bitrate is
+ * height, duration, size, mime, folder and date for every item, so the whole
+ * library is two cursor walks over indexed columns and no file ever gets
+ * opened — no `MediaMetadataRetriever`, no decode, no thumbnail. Bitrate is
  * `size * 8 / duration`, and the verdict is pure arithmetic in [MediaAudit].
  * A ten-thousand item library is a few hundred milliseconds, and it costs the
  * same whether the files are on internal storage or an SD card.
@@ -93,6 +111,10 @@ class MediaLibraryScanner(context: Context) {
                 val heightIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.HEIGHT)
                 val mimeIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
                 val modifiedIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
+                val bucketIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_ID)
+                val bucketNameIdx =
+                    cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
+                val pathIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH)
                 val durationIdx = if (kind == MediaKind.VIDEO) {
                     cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DURATION)
                 } else {
@@ -131,6 +153,11 @@ class MediaLibraryScanner(context: Context) {
                         durationMs = duration,
                         mime = mime,
                         modifiedSec = cursor.getLongOrZero(modifiedIdx),
+                        bucketId = cursor.getLongOrZero(bucketIdx),
+                        folder = folderName(
+                            bucket = cursor.getString(bucketNameIdx),
+                            relativePath = cursor.getString(pathIdx),
+                        ),
                         audit = audit,
                     )
                     if (found.size % PROGRESS_EVERY == 0) onProgress(scanned, found.size)
@@ -148,7 +175,37 @@ class MediaLibraryScanner(context: Context) {
             imagesScanned = images,
             skipped = skipped,
             elapsedMs = (System.nanoTime() - started) / 1_000_000L,
+            folders = summariseFolders(found),
+            scannedAtSec = System.currentTimeMillis() / 1000L,
         )
+    }
+
+    /** Folders are derived from the findings, so the filter only ever lists
+     *  places that actually hold something worth converting. */
+    private fun summariseFolders(items: List<ScanItem>): List<FolderSummary> =
+        items.groupBy { it.bucketId }
+            .map { (bucketId, group) ->
+                FolderSummary(
+                    bucketId = bucketId,
+                    name = group.first().folder,
+                    count = group.size,
+                    videos = group.count { it.kind == MediaKind.VIDEO },
+                    images = group.count { it.kind == MediaKind.IMAGE },
+                    sizeBytes = group.sumOf { it.sizeBytes },
+                    savingBytes = group.sumOf { it.audit.savingBytes },
+                )
+            }
+            .sortedByDescending { it.savingBytes }
+
+    /**
+     * BUCKET_DISPLAY_NAME is the album name ("Camera"); the relative path adds
+     * the parent ("DCIM/Camera"), which is what distinguishes a camera roll
+     * from a chat app's download folder of the same name.
+     */
+    private fun folderName(bucket: String?, relativePath: String?): String {
+        val path = relativePath?.trim('/').orEmpty()
+        if (path.isNotEmpty()) return path
+        return bucket?.takeIf { it.isNotBlank() } ?: "未知文件夹"
     }
 
     private fun Cursor.getLongOrZero(index: Int): Long =
@@ -171,6 +228,9 @@ class MediaLibraryScanner(context: Context) {
             MediaStore.MediaColumns.HEIGHT,
             MediaStore.MediaColumns.MIME_TYPE,
             MediaStore.MediaColumns.DATE_MODIFIED,
+            MediaStore.MediaColumns.BUCKET_ID,
+            MediaStore.MediaColumns.BUCKET_DISPLAY_NAME,
+            MediaStore.MediaColumns.RELATIVE_PATH,
         )
 
         val VIDEO_PROJECTION = IMAGE_PROJECTION + MediaStore.MediaColumns.DURATION

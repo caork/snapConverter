@@ -155,6 +155,12 @@ Rules:
   A DNG is large on purpose and re-encoding it would discard sensor data.
 - Thresholds and floors live in `MediaAudit` with `AuditSensitivity`; the UI
   only picks a sensitivity, it never re-derives a verdict.
+- **Folder and date filters are a view over the findings, not a query.** The
+  whole report stays in memory, so switching folders is instant and the folder
+  list can state what each one is worth. A filter that hides a file also drops
+  it from the selection — the Convert button must never count a file the user
+  cannot see. The date filter measures from `ScanReport.scannedAtSec`, not
+  from "now", so the list cannot shift while the user is choosing.
 - Permissions: `READ_MEDIA_IMAGES` / `READ_MEDIA_VIDEO` on 33+,
   `READ_EXTERNAL_STORAGE` up to 32. A partial grant on 14+ is accepted as-is —
   the scan then reports on exactly the files the user shared.
