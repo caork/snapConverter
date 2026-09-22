@@ -129,6 +129,44 @@ ImageDecoder (setTargetSize = output size)
 That label is the condition for the exception. JPEG may be encoded on the CPU
 because the user picked JPEG and can see who encoded it; nothing else may.
 
+### Library scan (required shape)
+
+The scan answers "which of my files are bigger than they need to be" and must
+stay fast enough to run every time the screen opens.
+
+```text
+MediaStore.Video.Media + MediaStore.Images.Media
+  → one cursor each, 7/8-column projection, SIZE DESC
+  → bitrate = SIZE * 8 / DURATION, bytes-per-pixel = SIZE / (W*H)
+  → MediaAudit.audit()  (pure Kotlin, JVM-testable)
+```
+
+Rules:
+
+- **No file IO in the scan.** No `MediaMetadataRetriever`, no decode, no
+  thumbnail, no `openFileDescriptor`. Everything comes from indexed columns;
+  a 16k-item library scans in ~250 ms on a PJD110. If a fact is not in
+  MediaStore, the row is counted as skipped, not guessed at.
+- **The reference is the encoder's own model.** `MediaAudit.referenceBitrate`
+  calls `QualityStrategy`, so "2.6× over" means a hardware HEVC encode at that
+  quality would really need a fraction of the bits. Never introduce a second,
+  independent size heuristic.
+- **RAW and animated stills are never flagged** (`UNJUDGED_STILL_SUBTYPES`).
+  A DNG is large on purpose and re-encoding it would discard sensor data.
+- Thresholds and floors live in `MediaAudit` with `AuditSensitivity`; the UI
+  only picks a sensitivity, it never re-derives a verdict.
+- Permissions: `READ_MEDIA_IMAGES` / `READ_MEDIA_VIDEO` on 33+,
+  `READ_EXTERNAL_STORAGE` up to 32. A partial grant on 14+ is accepted as-is —
+  the scan then reports on exactly the files the user shared.
+
+Batch conversion writes through `MediaOutputWriter` — the same pending →
+encode → commit path the single-file screen uses — runs one file at a time
+(the encoder is a single shared block), never overwrites or deletes an
+original, and asks before starting a run of more than 20 files.
+`BatchSettings.resolution = ORIGINAL` sets `CompressionRequest.keepOriginalPixels`,
+which is the one way to bypass the quality tier's long-edge cap: a batch that
+says "尺寸 原始" must not quietly hand back 1080p.
+
 ### Encoder selection (required)
 
 Never trust `createEncoderByType("video/hevc")`.
@@ -188,6 +226,8 @@ videoBitrate ≈ (targetFileSizeBits - estimatedAudioBits - containerOverhead) /
 - Precise trim: trimStartUs/trimEndUs on CompressionRequest, re-encoded through the hardware pipeline; audio passthrough honors the same window (PTS rebased)
 - Audio-only extraction: AudioExtractor (Extractor → Muxer → M4A), pure passthrough, no codec involved, not gated on Qualcomm encoder availability
 - Mute: muteAudio on CompressionRequest drops the audio track
+- Library scan: `MediaAudit` (engine policy) + `MediaLibraryScanner` (app), MediaStore columns only
+- Batch conversion of the scan's selection, one shared `BatchSettings`, sequential through `MediaOutputWriter`
 - Device capability screen from live `MediaCodecList`
 - HDR in → HDR out (HEVC/AV1 Main10, HLG / HDR10 metadata, 10-bit BT.2020 EGL). No silent SDR fallback.
 - OpenGL ES 3.x frame processor
@@ -199,7 +239,7 @@ videoBitrate ≈ (targetFileSizeBits - estimatedAudioBits - containerOverhead) /
 - HDR→SDR tone map
 - ROI encoding, LTR, encoder statistics-driven bitrate
 - Content-aware bitrate
-- Batch queue
+- Background / foreground-service batch runs (the batch currently lives with the screen)
 - MediaTek / Exynos vendor policies
 - Media3 Transformer as an alternate engine
 

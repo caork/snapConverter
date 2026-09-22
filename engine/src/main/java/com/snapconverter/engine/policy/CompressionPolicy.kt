@@ -18,9 +18,10 @@ class CompressionPolicy {
         val display = displaySize(source)
         val capped = capResolution(display.first, display.second, request.resolution)
         val quality = QualityStrategy.interpolate(request.appQuality)
-        val longEdgeCap = when (request.resolution) {
-            OutputResolution.ORIGINAL -> quality.maxLongEdge
-            else -> Int.MAX_VALUE
+        val longEdgeCap = when {
+            request.resolution != OutputResolution.ORIGINAL -> Int.MAX_VALUE
+            request.keepOriginalPixels -> Int.MAX_VALUE
+            else -> quality.maxLongEdge
         }
         val sized = fitLongEdge(capped.first, capped.second, longEdgeCap)
         val width = alignEven(sized.first)
@@ -215,13 +216,7 @@ class CompressionPolicy {
         return fitLongEdge(width, height, long)
     }
 
-    private fun capLongEdge(cap: OutputResolution): Int? = when (cap) {
-        OutputResolution.ORIGINAL -> null
-        OutputResolution.UHD_2160 -> 3840
-        OutputResolution.QHD_1440 -> 2560
-        OutputResolution.FHD_1080 -> 1920
-        OutputResolution.HD_720 -> 1280
-    }
+    private fun capLongEdge(cap: OutputResolution): Int? = cap.longEdge
 
     private fun fitLongEdge(width: Int, height: Int, maxLong: Int): Pair<Int, Int> {
         val long = maxOf(width, height)

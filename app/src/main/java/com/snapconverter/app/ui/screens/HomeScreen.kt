@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.PhotoSizeSelectLarge
+import androidx.compose.material.icons.rounded.Savings
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Speed
@@ -141,6 +142,7 @@ fun HomeScreen(
     viewModel: JobViewModel,
     settings: AppSettings.Options,
     onSettingsChange: (AppSettings.Options) -> Unit,
+    onOpenScan: () -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -191,6 +193,7 @@ fun HomeScreen(
         CardStack {
             if (state.stage == ConvertStage.IDLE || state.stage == ConvertStage.LOADING) {
                 ImportCard(loading = state.stage == ConvertStage.LOADING, onPick = pick)
+                ScanEntryCard(onOpenScan)
                 CapabilityCard(state) { sheet = HomeSheet.Capabilities }
             } else {
                 SourceCard(
@@ -410,6 +413,20 @@ private fun ImportCard(loading: Boolean, onPick: (Array<String>) -> Unit) {
             subtitle = "转成 HEIC / AVIF / JPEG",
             enabled = !loading,
         ) { onPick(ImageOnly) }
+    }
+}
+
+/** Entry to the library scan — the other way in, when there is no file in hand. */
+@Composable
+private fun ScanEntryCard(onOpen: () -> Unit) {
+    ContentCard(padding = PaddingValues(horizontal = Ios27Spacing.lg, vertical = Ios27Spacing.md)) {
+        TileNavRow(
+            title = "扫描媒体库",
+            icon = Icons.Rounded.Savings,
+            tone = TileTone.Yellow,
+            subtitle = "找出偏大的视频和照片，批量转换",
+            onClick = onOpen,
+        )
     }
 }
 

@@ -16,6 +16,10 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -139,6 +143,153 @@ fun Ios27Screen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Spacer(Modifier.size(Ios27Metrics.touchTarget))
+                Text(
+                    text = title,
+                    style = Ios27Type.headline,
+                    color = palette.label,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .weight(1f)
+                        .alpha(titleAlpha),
+                )
+                trailing()
+            }
+        }
+
+        if (bottomBar != null) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .ios27BarChrome(active = true, edge = BarEdge.Bottom),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(
+                            horizontal = Ios27Spacing.margin,
+                            vertical = Ios27Spacing.md,
+                        ),
+                ) {
+                    bottomBar()
+                }
+                Spacer(Modifier.navigationBarsPadding())
+            }
+        }
+    }
+}
+
+/**
+ * Same chrome as [Ios27Screen], but the body is a lazy list.
+ *
+ * The scan can return hundreds of rows, each with a thumbnail, so that screen
+ * cannot live in a scrolling [Column]. The header scrolls as the list's first
+ * item; everything else — collapse threshold, bar chrome, bottom bar — behaves
+ * exactly as it does on the workbench.
+ */
+@Composable
+fun Ios27LazyScreen(
+    title: String,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    showMark: Boolean = false,
+    leading: @Composable RowScope.() -> Unit = {},
+    trailing: @Composable RowScope.() -> Unit = {},
+    bottomBar: @Composable (() -> Unit)? = null,
+    header: @Composable (() -> Unit)? = null,
+    content: LazyListScope.() -> Unit,
+) {
+    val palette = LocalIos27Palette.current
+    val listState = rememberLazyListState()
+    val density = LocalDensity.current
+    val collapseAt = remember(density) { with(density) { 44.dp.toPx() } }
+    val collapsed = listState.firstVisibleItemIndex > 0 ||
+        listState.firstVisibleItemScrollOffset > collapseAt
+    val titleAlpha by animateFloatAsState(
+        targetValue = if (collapsed) 1f else 0f,
+        animationSpec = Ios27Motion.Gentle,
+        label = "inlineTitle",
+    )
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(palette.groupedBackground),
+    ) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            item(key = "header") {
+                Column {
+                    Spacer(
+                        Modifier
+                            .statusBarsPadding()
+                            .height(Ios27Metrics.navBar),
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .alpha(1f - titleAlpha)
+                            .padding(
+                                start = Ios27Spacing.margin,
+                                end = Ios27Spacing.margin,
+                                bottom = Ios27Spacing.lg,
+                            ),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (showMark) {
+                            AppMark(size = 42.dp)
+                            Spacer(Modifier.size(Ios27Spacing.md))
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = title,
+                                style = Ios27Type.title2,
+                                color = palette.label,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (subtitle != null) {
+                                Text(
+                                    text = subtitle,
+                                    style = Ios27Type.footnote,
+                                    color = palette.labelSecondary,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                    header?.invoke()
+                }
+            }
+            content()
+            item(key = "tail") {
+                Spacer(Modifier.height(if (bottomBar != null) 120.dp else Ios27Spacing.xxxl))
+                Spacer(Modifier.navigationBarsPadding())
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .ios27BarChrome(active = collapsed, edge = BarEdge.Top),
+        ) {
+            Spacer(Modifier.statusBarsPadding())
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(Ios27Metrics.navBar)
+                    .padding(horizontal = Ios27Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    modifier = Modifier.widthIn(min = Ios27Metrics.touchTarget),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) { leading() }
                 Text(
                     text = title,
                     style = Ios27Type.headline,

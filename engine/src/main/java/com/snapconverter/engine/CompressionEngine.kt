@@ -11,6 +11,7 @@ import com.snapconverter.engine.image.ImageEngine
 import com.snapconverter.engine.policy.CompressionRequest
 import com.snapconverter.engine.policy.ImageSourceInfo
 import com.snapconverter.engine.policy.MediaKind
+import com.snapconverter.engine.policy.OutputImageCodec
 import com.snapconverter.engine.policy.VideoSourceInfo
 import com.snapconverter.engine.progress.EncodeProgress
 import com.snapconverter.engine.progress.EncodeProgressListener
@@ -45,8 +46,12 @@ class CompressionEngine(
         request: CompressionRequest,
         progress: EncodeProgressListener? = null,
     ) {
+        // JPEG is the declared CPU path (see AGENTS.md constraint 4), so it is
+        // the one job that does not need a Qualcomm hardware encoder.
+        val needsHardwareEncoder =
+            kind == MediaKind.VIDEO || request.imageCodec != OutputImageCodec.JPEG
         val caps = probeDevice()
-        if (!caps.v1Supported) {
+        if (needsHardwareEncoder && !caps.v1Supported) {
             throw QualcommEncoderRequiredException(
                 request.videoCodec.name,
                 caps.encoders.map { it.name },

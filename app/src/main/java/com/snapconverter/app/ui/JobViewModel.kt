@@ -1,7 +1,6 @@
 package com.snapconverter.app.ui
 
 import android.app.Application
-import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.IntentSender
@@ -9,16 +8,15 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.DocumentsContract
-import android.provider.MediaStore
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.snapconverter.app.media.MediaOutputWriter
 import com.snapconverter.app.media.NeedsUserConsentException
 import com.snapconverter.app.media.OriginalReplacer
 import com.snapconverter.app.media.ReplaceRequest
 import com.snapconverter.app.SnapConverterApp
 import com.snapconverter.engine.device.DeviceCapabilityReport
 import com.snapconverter.engine.media.CaptureTimestamp
-import com.snapconverter.engine.media.Mp4TimestampPatcher
 import com.snapconverter.engine.codec.MimeTypes
 import com.snapconverter.engine.policy.BitrateEstimator
 import com.snapconverter.engine.policy.BitrateModeOption
@@ -43,7 +41,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 
 enum class ConvertStage { IDLE, LOADING, READY, RUNNING, DONE }
 
@@ -174,6 +171,7 @@ data class UiState(
 class JobViewModel(application: Application) : AndroidViewModel(application) {
     private val engine = (application as SnapConverterApp).engine
     private val replacer = OriginalReplacer(application)
+    private val writer = MediaOutputWriter(application, engine)
     private val prefs = application.getSharedPreferences("snapconverter", Context.MODE_PRIVATE)
     private val _state = MutableStateFlow(loadUi())
     val state: StateFlow<UiState> = _state
@@ -719,224 +717,51 @@ class JobViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private data class Published(
-        val uri: Uri,
-        val displayName: String,
-        val folderLabel: String,
-        val sizeBytes: Long,
-    )
-
     private fun encodeToMediaStore(
         kind: MediaKind,
         input: Uri,
         request: CompressionRequest,
         snapshot: UiState,
-    ): Published {
-        val resolver = getApplication<Application>().contentResolver
+    ): MediaOutputWriter.Published {
         val audioOnly = kind == MediaKind.VIDEO && snapshot.audioOnly
-        val ext = when {
-            audioOnly -> "m4a"
-            kind == MediaKind.VIDEO -> "mp4"
-            request.imageCodec == OutputImageCodec.AVIF -> "avif"
-            request.imageCodec == OutputImageCodec.HEIC -> "heic"
-            else -> "jpg"
-        }
-        val displayName = outputName(snapshot.displayName, ext)
-        if (snapshot.saveFolder == SaveFolder.CUSTOM) {
-            return encodeToTree(kind, input, request, snapshot, displayName, ext)
-        }
-        val relative = if (audioOnly) {
-            snapshot.saveFolder.relativeAudioPath()
+        val label = snapshot.saveFolder.pathLabel(kind, snapshot.customFolderLabel)
+        val destination = if (snapshot.saveFolder == SaveFolder.CUSTOM) {
+            MediaOutputWriter.Destination.Tree(
+                treeUri = snapshot.customTreeUri ?: error("未选择保存文件夹"),
+                label = label,
+            )
         } else {
-            snapshot.saveFolder.relativePath(kind)
-        }
-        val capture = snapshot.captureTimeMs
-        val values = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
-            put(
-                MediaStore.MediaColumns.MIME_TYPE,
-                when {
-                    audioOnly -> "audio/mp4"
-                    kind == MediaKind.VIDEO -> "video/mp4"
-                    ext == "avif" -> MimeTypes.AVIF
-                    ext == "heic" -> "image/heif"
-                    else -> "image/jpeg"
+            MediaOutputWriter.Destination.Library(
+                relativePath = if (audioOnly) {
+                    snapshot.saveFolder.relativeAudioPath()
+                } else {
+                    snapshot.saveFolder.relativePath(kind)
                 },
+                label = label,
             )
-            put(MediaStore.MediaColumns.RELATIVE_PATH, relative)
-            if (snapshot.preserveCaptureTime && capture != null) {
-                put(MediaStore.MediaColumns.DATE_TAKEN, capture)
-                put(MediaStore.MediaColumns.DATE_ADDED, capture / 1000)
-                put(MediaStore.MediaColumns.DATE_MODIFIED, capture / 1000)
+        }
+        return writer.write(
+            MediaOutputWriter.Request(
+                kind = kind,
+                input = input,
+                sourceName = snapshot.displayName,
+                destination = destination,
+                compression = request,
+                audioOnly = audioOnly,
+                preserveCaptureTime = snapshot.preserveCaptureTime,
+                captureTimeMs = snapshot.captureTimeMs,
+            ),
+        ) { update ->
+            _state.update {
+                it.copy(
+                    progress = update,
+                    message = update.message ?: if (audioOnly) {
+                        "正在提取音频…"
+                    } else {
+                        "正在硬件转码…"
+                    },
+                )
             }
-            if (Build.VERSION.SDK_INT >= 29) put(MediaStore.MediaColumns.IS_PENDING, 1)
-        }
-        val collection = when {
-            audioOnly -> MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-            kind == MediaKind.VIDEO -> MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-            else -> MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-        }
-        val out = resolver.insert(collection, values) ?: error("无法写入媒体库")
-        try {
-            resolver.openFileDescriptor(out, "w")?.use { pfd ->
-                if (audioOnly) {
-                    engine.extractAudio(input, pfd) { update ->
-                        _state.update {
-                            it.copy(
-                                progress = update,
-                                message = update.message ?: "正在提取音频…",
-                            )
-                        }
-                    }
-                } else {
-                    engine.compress(kind, input, pfd, request) { update ->
-                        _state.update {
-                            it.copy(
-                                progress = update,
-                                message = update.message ?: "正在硬件转码…",
-                            )
-                        }
-                    }
-                }
-            } ?: error("无法打开输出文件")
-
-            if (snapshot.preserveCaptureTime && capture != null) {
-                applyCaptureTime(out, kind, input, capture)
-            }
-
-            val done = ContentValues().apply {
-                if (Build.VERSION.SDK_INT >= 29) put(MediaStore.MediaColumns.IS_PENDING, 0)
-                if (snapshot.preserveCaptureTime && capture != null) {
-                    put(MediaStore.MediaColumns.DATE_TAKEN, capture)
-                    put(MediaStore.MediaColumns.DATE_MODIFIED, capture / 1000)
-                }
-            }
-            resolver.update(out, done, null, null)
-            val size = querySize(out)
-            return Published(
-                uri = out,
-                displayName = displayName,
-                folderLabel = snapshot.saveFolder.pathLabel(kind, snapshot.customFolderLabel),
-                sizeBytes = size,
-            )
-        } catch (t: Throwable) {
-            resolver.delete(out, null, null)
-            throw t
-        }
-    }
-
-    private fun applyCaptureTime(output: Uri, kind: MediaKind, input: Uri, captureMs: Long) {
-        val resolver = getApplication<Application>().contentResolver
-        val path = queryPath(output)
-        if (kind == MediaKind.VIDEO) {
-            path?.let { runCatching { Mp4TimestampPatcher.patchFile(it, captureMs) } }
-        } else {
-            runCatching { CaptureTimestamp.copyExifDates(resolver, input, output) }
-            runCatching { CaptureTimestamp.stampExif(resolver, output, captureMs) }
-        }
-        path?.let { File(it).setLastModified(captureMs) }
-    }
-
-    private fun queryPath(uri: Uri): String? {
-        val resolver = getApplication<Application>().contentResolver
-        val projection = arrayOf(
-            MediaStore.MediaColumns.DATA,
-            MediaStore.MediaColumns.RELATIVE_PATH,
-            MediaStore.MediaColumns.DISPLAY_NAME,
-        )
-        resolver.query(uri, projection, null, null, null)?.use { c ->
-            if (!c.moveToFirst()) return null
-            val dataIdx = c.getColumnIndex(MediaStore.MediaColumns.DATA)
-            if (dataIdx >= 0) {
-                val data = c.getString(dataIdx)
-                if (!data.isNullOrBlank()) return data
-            }
-            val rel = c.getColumnIndex(MediaStore.MediaColumns.RELATIVE_PATH)
-            val name = c.getColumnIndex(MediaStore.MediaColumns.DISPLAY_NAME)
-            if (rel >= 0 && name >= 0) {
-                val relative = c.getString(rel)?.trimEnd('/') ?: return null
-                val display = c.getString(name) ?: return null
-                return "/storage/emulated/0/$relative/$display"
-            }
-        }
-        return null
-    }
-
-    private fun querySize(uri: Uri): Long {
-        val resolver = getApplication<Application>().contentResolver
-        resolver.query(uri, arrayOf(MediaStore.MediaColumns.SIZE), null, null, null)?.use { c ->
-            if (c.moveToFirst()) return c.getLong(0)
-        }
-        return 0
-    }
-
-    private fun outputName(original: String, ext: String): String {
-        val stem = original.substringBeforeLast('.', original)
-            .ifBlank { "snapconverter" }
-            .replace(Regex("[\\\\/:*?\"<>|]"), "_")
-        return "${stem}_sc.$ext"
-    }
-
-    private fun encodeToTree(
-        kind: MediaKind,
-        input: Uri,
-        request: CompressionRequest,
-        snapshot: UiState,
-        displayName: String,
-        ext: String,
-    ): Published {
-        val resolver = getApplication<Application>().contentResolver
-        val tree = snapshot.customTreeUri ?: error("未选择保存文件夹")
-        val docId = DocumentsContract.getTreeDocumentId(tree)
-        val parent = DocumentsContract.buildDocumentUriUsingTree(tree, docId)
-        val audioOnly = kind == MediaKind.VIDEO && snapshot.audioOnly
-        val mime = when {
-            audioOnly -> "audio/mp4"
-            kind == MediaKind.VIDEO -> "video/mp4"
-            ext == "avif" -> MimeTypes.AVIF
-            ext == "heic" -> "image/heif"
-            else -> "image/jpeg"
-        }
-        val out = DocumentsContract.createDocument(resolver, parent, mime, displayName)
-            ?: error("无法在所选文件夹创建文件")
-        try {
-            resolver.openFileDescriptor(out, "w")?.use { pfd ->
-                if (audioOnly) {
-                    engine.extractAudio(input, pfd) { update ->
-                        _state.update {
-                            it.copy(
-                                progress = update,
-                                message = update.message ?: "正在提取音频…",
-                            )
-                        }
-                    }
-                } else {
-                    engine.compress(kind, input, pfd, request) { update ->
-                        _state.update {
-                            it.copy(
-                                progress = update,
-                                message = update.message ?: "正在硬件转码…",
-                            )
-                        }
-                    }
-                }
-            } ?: error("无法打开输出文件")
-            val capture = snapshot.captureTimeMs
-            if (snapshot.preserveCaptureTime && capture != null) {
-                applyCaptureTime(out, kind, input, capture)
-            }
-            val size = querySize(out).takeIf { it > 0 } ?: runCatching {
-                resolver.openFileDescriptor(out, "r")?.statSize ?: 0L
-            }.getOrDefault(0L)
-            return Published(
-                uri = out,
-                displayName = displayName,
-                folderLabel = snapshot.saveFolder.pathLabel(kind, snapshot.customFolderLabel),
-                sizeBytes = size,
-            )
-        } catch (t: Throwable) {
-            runCatching { DocumentsContract.deleteDocument(resolver, out) }
-            throw t
         }
     }
 

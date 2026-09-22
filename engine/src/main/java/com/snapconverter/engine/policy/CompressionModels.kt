@@ -19,6 +19,16 @@ enum class OutputResolution {
     HD_720,
 }
 
+/** Long-edge cap in pixels for a resolution preset; null keeps the source size. */
+val OutputResolution.longEdge: Int?
+    get() = when (this) {
+        OutputResolution.ORIGINAL -> null
+        OutputResolution.UHD_2160 -> 3840
+        OutputResolution.QHD_1440 -> 2560
+        OutputResolution.FHD_1080 -> 1920
+        OutputResolution.HD_720 -> 1280
+    }
+
 enum class OutputFps {
     ORIGINAL,
     FPS_60,
@@ -79,6 +89,13 @@ data class CompressionRequest(
     val videoCodec: OutputVideoCodec = OutputVideoCodec.HEVC,
     val imageCodec: OutputImageCodec = OutputImageCodec.HEIC,
     val resolution: OutputResolution = OutputResolution.ORIGINAL,
+    /**
+     * [OutputResolution.ORIGINAL] normally still obeys the quality tier's
+     * long-edge cap, so a 4K source at quality 70 comes out at 1080p. Batch
+     * conversion offers "keep the resolution" as a promise, so it sets this
+     * and the source geometry survives untouched.
+     */
+    val keepOriginalPixels: Boolean = false,
     val fps: OutputFps = OutputFps.ORIGINAL,
     val bitrateMode: BitrateModeOption = BitrateModeOption.AUTO,
     val maxBitrateBps: Int? = null,
