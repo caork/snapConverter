@@ -123,6 +123,55 @@ class MediaAuditTest {
     }
 
     @Test
+    fun presetsExpandIntoTheNumbersTheAuditApplies() {
+        val standard = AuditSensitivity.STANDARD.tuning()
+        assertEquals(MediaAudit.VIDEO_HIGH, standard.videoHigh, 0.001)
+        assertEquals(4096, standard.maxLongEdge)
+        val strict = AuditSensitivity.STRICT.tuning()
+        assertTrue(strict.videoHigh < standard.videoHigh)
+        assertTrue(strict.minVideoBytes < standard.minVideoBytes)
+    }
+
+    @Test
+    fun aTunedThresholdOverridesThePreset() {
+        // 6 Mbps at 1080p is 1.5x the model: under the stock 1.6x bar.
+        val fact = video(mbps = 6.0, seconds = 60)
+        assertFalse(MediaAudit.audit(fact).flagged)
+        val eager = AuditSensitivity.STANDARD.tuning().copy(videoHigh = 1.2)
+        assertEquals(AuditVerdict.HIGH, MediaAudit.audit(fact, eager).verdict)
+    }
+
+    @Test
+    fun aTunedStillTargetMovesBothTheVerdictAndTheEstimate() {
+        // 12 MP at 0.25 B/px: 2.1x the stock 0.12 target, so HIGH.
+        val fact = still(4000, 3000, 3_000_000)
+        assertEquals(AuditVerdict.HIGH, MediaAudit.audit(fact).verdict)
+        // Ask for 0.30 B/px instead and the same file is fine — and the
+        // estimate it is judged against grows with the target.
+        val lenient = AuditSensitivity.STANDARD.tuning().copy(stillTargetBpp = 0.30)
+        val result = MediaAudit.audit(fact, lenient)
+        assertFalse(result.flagged)
+        assertTrue(result.estimatedBytes > MediaAudit.audit(fact).estimatedBytes)
+    }
+
+    @Test
+    fun rawCanBeJudgedWhenTheCallerAsksForIt() {
+        val dng = still(4624, 3472, 32_000_000).copy(mime = "image/x-adobe-dng")
+        assertFalse(MediaAudit.audit(dng).flagged)
+        val including = AuditSensitivity.STANDARD.tuning().copy(skipUnjudgedStills = false)
+        assertEquals(AuditVerdict.VERY_HIGH, MediaAudit.audit(dng, including).verdict)
+    }
+
+    @Test
+    fun aRaisedFloorKeepsMidSizedFilesOut() {
+        val fact = video(mbps = 17.0, seconds = 10)
+        assertTrue(MediaAudit.audit(fact).flagged)
+        val floored = AuditSensitivity.STANDARD.tuning()
+            .copy(minVideoBytes = 64L * 1024 * 1024)
+        assertFalse(MediaAudit.audit(fact, floored).flagged)
+    }
+
+    @Test
     fun smallStillsNeverAppear() {
         assertFalse(MediaAudit.audit(still(1200, 800, 400_000)).flagged)
     }

@@ -35,7 +35,53 @@ enum class AuditSensitivity(
     RELAXED(1.5, 2.0, 6000),
     STANDARD(1.0, 1.0, 4096),
     STRICT(0.7, 0.4, 3200),
+    ;
+
+    /** The preset expanded into the numbers the audit actually applies. */
+    fun tuning(): AuditTuning = AuditTuning(
+        videoHigh = MediaAudit.VIDEO_HIGH * thresholdScale,
+        videoVeryHigh = MediaAudit.VIDEO_VERY_HIGH * thresholdScale,
+        stillHigh = MediaAudit.STILL_HIGH * thresholdScale,
+        stillVeryHigh = MediaAudit.STILL_VERY_HIGH * thresholdScale,
+        stillTargetBpp = MediaAudit.STILL_TARGET_BPP,
+        maxLongEdge = maxLongEdge,
+        minVideoBytes = (MediaAudit.VIDEO_MIN_BYTES * floorScale).toLong(),
+        minVideoMs = MediaAudit.VIDEO_MIN_MS,
+        minVideoSaving = (MediaAudit.VIDEO_MIN_SAVING * floorScale).toLong(),
+        minStillBytes = (MediaAudit.STILL_MIN_BYTES * floorScale).toLong(),
+        minStillSaving = (MediaAudit.STILL_MIN_SAVING * floorScale).toLong(),
+    )
 }
+
+/**
+ * Every number the audit applies, so the advanced sheet can expose them
+ * individually instead of only offering three presets. [AuditSensitivity]
+ * builds one of these; the UI may then change any single field, which is what
+ * "自定义" means on that screen.
+ */
+data class AuditTuning(
+    /** Bitrate multiples over the model at which a video is flagged. */
+    val videoHigh: Double = MediaAudit.VIDEO_HIGH,
+    val videoVeryHigh: Double = MediaAudit.VIDEO_VERY_HIGH,
+    /** Density multiples over [stillTargetBpp] at which a still is flagged. */
+    val stillHigh: Double = MediaAudit.STILL_HIGH,
+    val stillVeryHigh: Double = MediaAudit.STILL_VERY_HIGH,
+    /** Bytes per pixel a converted still is expected to need. */
+    val stillTargetBpp: Double = MediaAudit.STILL_TARGET_BPP,
+    /** Long edge above which a still is oversized, and the estimate's cap. */
+    val maxLongEdge: Int = 4096,
+    val minVideoBytes: Long = MediaAudit.VIDEO_MIN_BYTES,
+    val minVideoMs: Long = MediaAudit.VIDEO_MIN_MS,
+    val minVideoSaving: Long = MediaAudit.VIDEO_MIN_SAVING,
+    val minStillBytes: Long = MediaAudit.STILL_MIN_BYTES,
+    val minStillSaving: Long = MediaAudit.STILL_MIN_SAVING,
+    /**
+     * RAW negatives and animated stills are excluded by default. Turning this
+     * off judges them like any other still, which will flag every DNG in the
+     * library — the caller has to mean it.
+     */
+    val skipUnjudgedStills: Boolean = true,
+)
 
 /** Everything the audit needs, all of it available from a MediaStore row. */
 data class MediaFact(
@@ -72,24 +118,30 @@ object MediaAudit {
     /** Bytes per pixel a hardware HEIC still needs at [AUDIT_QUALITY]-ish. */
     const val STILL_TARGET_BPP = 0.12
 
-    private const val VIDEO_HIGH = 1.6
-    private const val VIDEO_VERY_HIGH = 2.6
-    private const val STILL_HIGH = 1.8
-    private const val STILL_VERY_HIGH = 3.0
+    const val VIDEO_HIGH = 1.6
+    const val VIDEO_VERY_HIGH = 2.6
+    const val STILL_HIGH = 1.8
+    const val STILL_VERY_HIGH = 3.0
 
-    private const val VIDEO_MIN_BYTES = 12L * 1024 * 1024
-    private const val VIDEO_MIN_MS = 3_000L
-    private const val VIDEO_MIN_SAVING = 4L * 1024 * 1024
-    private const val STILL_MIN_BYTES = 1_500L * 1024
-    private const val STILL_MIN_SAVING = 600L * 1024
+    const val VIDEO_MIN_BYTES = 12L * 1024 * 1024
+    const val VIDEO_MIN_MS = 3_000L
+    const val VIDEO_MIN_SAVING = 4L * 1024 * 1024
+    const val STILL_MIN_BYTES = 1_500L * 1024
+    const val STILL_MIN_SAVING = 600L * 1024
 
     fun audit(
         fact: MediaFact,
         sensitivity: AuditSensitivity = AuditSensitivity.STANDARD,
         quality: Int = AUDIT_QUALITY,
+    ): AuditResult = audit(fact, sensitivity.tuning(), quality)
+
+    fun audit(
+        fact: MediaFact,
+        tuning: AuditTuning,
+        quality: Int = AUDIT_QUALITY,
     ): AuditResult = when (fact.kind) {
-        MediaKind.VIDEO -> auditVideo(fact, sensitivity, quality)
-        MediaKind.IMAGE -> auditStill(fact, sensitivity)
+        MediaKind.VIDEO -> auditVideo(fact, tuning, quality)
+        MediaKind.IMAGE -> auditStill(fact, tuning)
     }
 
     /**
@@ -101,6 +153,7 @@ object MediaAudit {
         fact: MediaFact,
         quality: Int = AUDIT_QUALITY,
         maxLongEdge: Int = Int.MAX_VALUE,
+        stillBpp: Double = STILL_TARGET_BPP,
     ): Long {
         val (w, h) = cappedSize(fact.width, fact.height, maxLongEdge)
         if (w <= 0 || h <= 0) return 0L
@@ -110,9 +163,17 @@ object MediaAudit {
                 val bps = referenceBitrate(w, h, quality)
                 (bps.toDouble() * fact.durationMs / 8_000.0).roundToLong()
             }
-            MediaKind.IMAGE -> (w.toLong() * h * STILL_TARGET_BPP).roundToLong()
+            MediaKind.IMAGE -> (w.toLong() * h * stillBpp).roundToLong()
         }
     }
+
+    private fun estimateStillBytes(fact: MediaFact, tuning: AuditTuning): Long =
+        estimateOutputBytes(
+            fact = fact,
+            quality = AUDIT_QUALITY,
+            maxLongEdge = tuning.maxLongEdge,
+            stillBpp = tuning.stillTargetBpp,
+        )
 
     /** Bits per second a hardware HEVC encode of this geometry should need. */
     fun referenceBitrate(width: Int, height: Int, quality: Int = AUDIT_QUALITY): Int =
@@ -136,13 +197,13 @@ object MediaAudit {
 
     private fun auditVideo(
         fact: MediaFact,
-        sensitivity: AuditSensitivity,
+        tuning: AuditTuning,
         quality: Int,
     ): AuditResult {
-        val floorBytes = (VIDEO_MIN_BYTES * sensitivity.floorScale).toLong()
-        val minSaving = (VIDEO_MIN_SAVING * sensitivity.floorScale).toLong()
+        val floorBytes = tuning.minVideoBytes
+        val minSaving = tuning.minVideoSaving
         if (fact.width <= 0 || fact.height <= 0 ||
-            fact.durationMs < VIDEO_MIN_MS ||
+            fact.durationMs < tuning.minVideoMs ||
             fact.sizeBytes < floorBytes
         ) {
             return ok()
@@ -150,10 +211,10 @@ object MediaAudit {
         val bitrate = (fact.sizeBytes * 8_000.0 / fact.durationMs).roundToLong()
         val reference = referenceBitrate(fact.width, fact.height, quality).toLong()
         val overshoot = bitrate.toDouble() / reference
-        val estimated = estimateOutputBytes(fact, quality, sensitivity.maxLongEdge)
+        val estimated = estimateOutputBytes(fact, quality, tuning.maxLongEdge)
         val saving = fact.sizeBytes - estimated
-        val high = VIDEO_HIGH * sensitivity.thresholdScale
-        val veryHigh = VIDEO_VERY_HIGH * sensitivity.thresholdScale
+        val high = tuning.videoHigh
+        val veryHigh = tuning.videoVeryHigh
         val verdict = when {
             saving < minSaving -> AuditVerdict.OK
             overshoot >= veryHigh -> AuditVerdict.VERY_HIGH
@@ -190,19 +251,19 @@ object MediaAudit {
         return UNJUDGED_STILL_SUBTYPES.none { subtype.contains(it) }
     }
 
-    private fun auditStill(fact: MediaFact, sensitivity: AuditSensitivity): AuditResult {
-        if (!judgeableStill(fact.mime)) return ok()
-        val floorBytes = (STILL_MIN_BYTES * sensitivity.floorScale).toLong()
-        val minSaving = (STILL_MIN_SAVING * sensitivity.floorScale).toLong()
+    private fun auditStill(fact: MediaFact, tuning: AuditTuning): AuditResult {
+        if (tuning.skipUnjudgedStills && !judgeableStill(fact.mime)) return ok()
+        val floorBytes = tuning.minStillBytes
+        val minSaving = tuning.minStillSaving
         val pixels = fact.width.toLong() * fact.height
         if (pixels <= 0L || fact.sizeBytes < floorBytes) return ok()
         val bpp = fact.sizeBytes.toDouble() / pixels
-        val overshoot = bpp / STILL_TARGET_BPP
-        val estimated = estimateOutputBytes(fact, AUDIT_QUALITY, sensitivity.maxLongEdge)
+        val overshoot = bpp / tuning.stillTargetBpp
+        val estimated = estimateStillBytes(fact, tuning)
         val saving = fact.sizeBytes - estimated
-        val oversizedGeometry = max(fact.width, fact.height) > sensitivity.maxLongEdge
-        val high = STILL_HIGH * sensitivity.thresholdScale
-        val veryHigh = STILL_VERY_HIGH * sensitivity.thresholdScale
+        val oversizedGeometry = max(fact.width, fact.height) > tuning.maxLongEdge
+        val high = tuning.stillHigh
+        val veryHigh = tuning.stillVeryHigh
         val verdict = when {
             saving < minSaving -> AuditVerdict.OK
             overshoot >= veryHigh -> AuditVerdict.VERY_HIGH

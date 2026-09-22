@@ -7,6 +7,7 @@ import android.net.Uri
 import android.provider.MediaStore
 import com.snapconverter.engine.policy.AuditResult
 import com.snapconverter.engine.policy.AuditSensitivity
+import com.snapconverter.engine.policy.AuditTuning
 import com.snapconverter.engine.policy.MediaAudit
 import com.snapconverter.engine.policy.MediaFact
 import com.snapconverter.engine.policy.MediaKind
@@ -86,6 +87,12 @@ class MediaLibraryScanner(context: Context) {
         sensitivity: AuditSensitivity = AuditSensitivity.STANDARD,
         quality: Int = MediaAudit.AUDIT_QUALITY,
         onProgress: (scanned: Int, found: Int) -> Unit = { _, _ -> },
+    ): ScanReport = scan(sensitivity.tuning(), quality, onProgress)
+
+    suspend fun scan(
+        tuning: AuditTuning,
+        quality: Int = MediaAudit.AUDIT_QUALITY,
+        onProgress: (scanned: Int, found: Int) -> Unit = { _, _ -> },
     ): ScanReport {
         val started = System.nanoTime()
         val found = ArrayList<ScanItem>(64)
@@ -139,7 +146,7 @@ class MediaLibraryScanner(context: Context) {
                     }
                     val mime = cursor.getString(mimeIdx).orEmpty()
                     val fact = MediaFact(kind, width, height, size, duration, mime)
-                    val audit = MediaAudit.audit(fact, sensitivity, quality)
+                    val audit = MediaAudit.audit(fact, tuning, quality)
                     if (!audit.flagged) continue
                     val id = cursor.getLong(idIdx)
                     found += ScanItem(
