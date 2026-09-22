@@ -16,14 +16,16 @@ Android already exposes vendor video silicon through `MediaCodec` (`c2.qti.*` / 
 
 The correct path is the one Android documents for `MediaCodec.createInputSurface()`: render with OpenGL ES (or another hardware API) directly into the encoder.
 
-Photos follow the same rule. `Bitmap.compress(JPEG, …)` is not hardware encode. V1’s still-image path is **HEIC via `HeifWriter` + a hardware HEVC encoder**. JPEG is offered only when a hardware JPEG encoder is actually enumerable; otherwise the app refuses instead of silently using the CPU.
+Photos follow the same rule. V1’s still-image path is **HEIC via `HeifWriter` + a hardware HEVC encoder**, or **AVIF via `AvifWriter` + a hardware AV1 encoder** (capability-gated).
+
+JPEG is the one declared exception: no Android device exposes a Surface-capable hardware JPEG encoder to apps, so JPEG is encoded on the CPU (`ImageDecoder.setTargetSize` → `Bitmap.compress` through libjpeg) and the UI labels every JPEG job **「CPU 编码」** — never “hardware”, never “Qualcomm”. The user picks JPEG knowing who encodes it; the CPU path is never used to rescue a failed hardware encode.
 
 ## V1 feature set
 
 | | Input | Output |
 | --- | --- | --- |
 | Video | MP4, MOV | H.265 / H.264 MP4 |
-| Image | JPEG, PNG, WebP, HEIC, AVIF (API 31+) | HEIC (HW HEVC still), AVIF (HW AV1 still), JPEG (HW only) |
+| Image | JPEG, PNG, WebP, HEIC, AVIF (API 31+) | HEIC (HW HEVC still), AVIF (HW AV1 still), JPEG (CPU, labelled 「CPU 编码」) |
 
 - Resolution: original, 2160p, 1440p, 1080p, 720p, or **custom W×H with aspect lock** (images, GPU resample)
 - Frame rate: original, 60, 30, 24
@@ -31,13 +33,25 @@ Photos follow the same rule. `Bitmap.compress(JPEG, …)` is not hardware encode
 - Trim: precise frame-accurate window re-encoded through the hardware pipeline (audio trimmed in sync)
 - Audio extraction: passthrough copy to M4A via Extractor → Muxer (no codec, lossless)
 - Mute: drop the audio track from the output
+- Library scan: rank the whole media library by compressibility from MediaStore columns only (no file IO, ~16k files in a few hundred ms), with folder / date / sensitivity filters
+- Batch conversion: convert the scan’s selection sequentially through the same hardware pipeline and the same pending → encode → commit output path
 - Hardware: **Qualcomm MediaCodec only** for encode (no software fallback)
 - GPU: OpenGL ES 3.x
 - Audio: copied into the MP4, not re-encoded
 
-Format availability is capability-driven: AVIF appears only when a hardware AV1 encoder enumerates; JPEG stays disabled when no public hardware JPEG encoder exists (CPU Bitmap.compress is refused by design). TIFF is not offered: Android has no hardware TIFF encoder and the framework cannot even decode TIFF, so it could only exist as a pure-CPU encode path.
+Format availability is capability-driven: AVIF appears only when a hardware AV1 encoder enumerates. JPEG always appears and is always labelled as a CPU encode. TIFF is not offered: Android has no hardware TIFF encoder and the framework cannot even decode TIFF, so it could only exist as an undeclared CPU encode path — JPEG’s labelled exception does not extend to it.
 
 AV1 video, HDR, ROI, and other-vendor SoCs are V2.
+
+## Screens
+
+Light, dark, and the library-scan flow (from a PJD110, in `docs/design/`):
+
+| Home (light) | Home (dark) | Scan result | Batch run |
+| --- | --- | --- | --- |
+| ![home light](docs/design/home-light.png) | ![home dark](docs/design/home-dark.png) | ![scan result](docs/design/scan-result.png) | ![batch](docs/design/scan-batch.png) |
+
+The UI follows the iOS 27 design language; the rules live in [AGENTS.md](AGENTS.md).
 
 ## Architecture
 

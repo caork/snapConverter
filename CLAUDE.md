@@ -17,14 +17,15 @@ On this machine the SDK is often at `/opt/homebrew/share/android-commandlinetool
 
 ## Guardrails (short)
 
-- No FFmpeg, no libx264/x265, no `Bitmap.compress`, no `createScaledBitmap` on the main path.
+- No FFmpeg, no libx264/x265, no `createScaledBitmap` on the main path.
+- `Bitmap.compress` only for JPEG via `ImageEngine.encodeJpegOnCpu` — the one declared CPU path, labelled 「CPU 编码」 in the UI. HEIC / AVIF / video stay hardware-only.
 - Select codecs with `HardwareCodecSelector` + `MediaCodec.createByCodecName`.
 - Video frames stay on Surface → OpenGL ES → encoder Surface.
-- Missing hardware encoder = user-visible failure, never CPU fallback.
+- Missing hardware encoder = user-visible failure; the labelled JPEG path is the only CPU encode and never rescues a failed hardware encode.
 - V1 encode is Qualcomm-only; do not silently accept Google software codecs.
 
 ## Layout
 
-- `:engine` — MediaCodec / EGL / policy
-- `:app` — Compose UI
+- `:engine` — MediaCodec / EGL / policy, audit (`MediaAudit`)
+- `:app` — Compose UI (workbench + scan/batch), MediaStore output
 - `docs/ARCHITECTURE.md` — pipeline notes

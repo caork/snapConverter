@@ -54,12 +54,24 @@ On API 31+, after creating a codec, call `getSupportedVendorParameters()` and on
 
 Frame-rate caps drop frames by presentation timestamp; duration is preserved.
 
+A trim window (`trimStartUs` / `trimEndUs` on `CompressionRequest`) selects the
+video frames and the audio passthrough copies only samples inside the same
+window, with PTS rebased to zero so audio and video stay in sync.
+`muteAudio` drops the audio track; `CompressionEngine.extractAudio` is a pure
+Extractor → Muxer copy to M4A with no codec involved.
+
 ## Image path
 
 1. `ImageDecoder` reads bounds and decodes into a GL-uploadable source (HardwareBuffer when the allocator allows it).
 2. `GpuFrameProcessor` draws into the still-encoder Surface at the target size.
 3. HEIC: `HeifWriter` `INPUT_MODE_SURFACE` + `EncoderPreference.HARDWARE_ENCODER_ONLY` (and CQ when requested).
-4. JPEG: only if `HardwareCodecSelector` finds a hardware `image/jpeg` (or vendor JPEG) encoder. Otherwise the engine throws `JpegHardwareUnavailableException`.
+4. AVIF: `AvifWriter` with the same Surface mode, gated on a hardware AV1 still encoder (`hasHardwareAv1StillEncoder`) and API 31+.
+5. JPEG: the one declared CPU path. No device exposes a Surface-capable
+   hardware JPEG encoder to apps, so `ImageEngine.encodeJpegOnCpu` resamples
+   in the platform decoder (`ImageDecoder.setTargetSize`) and encodes with
+   `Bitmap.compress` (libjpeg). The UI labels the job 「CPU 编码」. The CPU path
+   is only entered when the user picks JPEG; it never rescues a failed
+   hardware encode.
 
 ## Policy
 
@@ -73,6 +85,31 @@ Modes:
 - **Lossless remux** — reserved; not a re-encode. V1 UI may hide it.
 
 `KEY_QUALITY` values are vendor-specific. Do not treat `70` as a portable unit.
+
+## Library scan and batch
+
+The scan answers "which files are bigger than they need to be":
+
+```text
+MediaStore.Video.Media + MediaStore.Images.Media
+  → one cursor each, small projection, SIZE DESC
+  → bitrate = SIZE * 8 / DURATION, bytes-per-pixel = SIZE / (W*H)
+  → MediaAudit.audit()   (pure Kotlin, JVM-testable, engine policy)
+```
+
+No file IO in the scan — no `MediaMetadataRetriever`, no decode, no fds.
+Everything comes from indexed columns; missing facts count the row as
+skipped, never guessed. The reference bitrate comes from `QualityStrategy`,
+the same model the encoder uses, so "N× over" is a hardware-encode estimate,
+not a second heuristic. Folder and date filters are views over the in-memory
+report; a hidden file is also dropped from the selection.
+
+Batch conversion writes each output through `MediaOutputWriter` (the same
+pending → encode → commit path as the single-file screen), runs one file at a
+time (the encoder is one shared block), never overwrites an original, and
+asks before runs of more than 20 files. `BatchSettings.resolution = ORIGINAL`
+sets `CompressionRequest.keepOriginalPixels` — the only way to bypass the
+quality tier's long-edge cap.
 
 ## Adding another SoC vendor
 
