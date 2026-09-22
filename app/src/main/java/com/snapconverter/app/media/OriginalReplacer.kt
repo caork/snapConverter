@@ -49,11 +49,27 @@ class OriginalReplacer(private val app: Application) {
             )
         }
         ensureWritable(original)
-        overwrite(original, encoded)
+        val before = queryMeta(original)
         val mime = outputMime(request.kind, request.imageCodec)
-        val size = querySize(original).takeIf { it > 0 } ?: querySize(encoded)
+        // The count comes from the file being installed: MediaStore's SIZE for
+        // the original stays at the old value until its own scan catches up.
+        val written = querySize(encoded)
+        // The bytes are about to become HEIC/AVIF/MP4, so a name ending in
+        // ".JPG" would lie to every other app. Renaming *before* the write is
+        // what keeps the row and the file in step: MediaStore moves the file
+        // itself, and it does that correctly while the row still describes
+        // what is on disk. Renaming after the overwrite leaves the media scanner
+        // to find a file no row points at, and the original row empty.
+        renamedTo(before.displayName, request.kind, request.imageCodec)?.let { name ->
+            val rename = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.MIME_TYPE, mime)
+            }
+            runCatching { resolver.update(original, rename, null, null) }
+        }
+        overwrite(original, encoded)
         val values = ContentValues().apply {
-            put(MediaStore.MediaColumns.SIZE, size)
+            put(MediaStore.MediaColumns.SIZE, written)
             put(MediaStore.MediaColumns.MIME_TYPE, mime)
             val modified = if (request.preserveCaptureTime && request.captureTimeMs != null) {
                 request.captureTimeMs / 1000
@@ -75,10 +91,22 @@ class OriginalReplacer(private val app: Application) {
         val meta = queryMeta(original)
         return ReplaceResult(
             uri = original,
-            displayName = meta.displayName.ifBlank { "media" },
+            displayName = meta.displayName.ifBlank { before.displayName },
             folderLabel = folderLabel(meta.relativePath),
-            sizeBytes = meta.size.takeIf { it > 0 } ?: size,
+            sizeBytes = written.takeIf { it > 0 } ?: meta.size,
         )
+    }
+
+    /**
+     * One consent request covering every original that still needs it, so a
+     * batch of fifty asks the user once instead of fifty times. Returns null
+     * when they are all writable already.
+     */
+    fun writeConsentSender(uris: List<Uri>): IntentSender? {
+        if (Build.VERSION.SDK_INT < 30) return null
+        val blocked = uris.filter { isMediaStore(it) && !canWrite(it) }
+        if (blocked.isEmpty()) return null
+        return MediaStore.createWriteRequest(resolver, blocked).intentSender
     }
 
     private fun ensureWritable(uri: Uri) {
@@ -138,10 +166,43 @@ class OriginalReplacer(private val app: Application) {
     private fun outputMime(kind: MediaKind, imageCodec: OutputImageCodec): String = when (kind) {
         MediaKind.VIDEO -> "video/mp4"
         MediaKind.IMAGE -> when (imageCodec) {
-            OutputImageCodec.HEIC -> "image/heif"
+            // image/heic, not image/heif: MediaStore appends ".heif" to a name
+            // whose extension does not match the mime it was given.
+            OutputImageCodec.HEIC -> "image/heic"
             OutputImageCodec.AVIF -> "image/avif"
             OutputImageCodec.JPEG -> "image/jpeg"
         }
+    }
+
+    private fun extensionFor(kind: MediaKind, imageCodec: OutputImageCodec): String =
+        when (kind) {
+            MediaKind.VIDEO -> "mp4"
+            MediaKind.IMAGE -> when (imageCodec) {
+                OutputImageCodec.HEIC -> "heic"
+                OutputImageCodec.AVIF -> "avif"
+                OutputImageCodec.JPEG -> "jpg"
+            }
+        }
+
+    /** The name the replaced file should carry, or null when it already fits. */
+    private fun renamedTo(
+        displayName: String,
+        kind: MediaKind,
+        imageCodec: OutputImageCodec,
+    ): String? {
+        if (displayName.isBlank()) return null
+        val current = displayName.substringAfterLast('.', "").lowercase()
+        val accepted = when (kind) {
+            MediaKind.VIDEO -> setOf("mp4", "m4v")
+            MediaKind.IMAGE -> when (imageCodec) {
+                OutputImageCodec.HEIC -> setOf("heic", "heif")
+                OutputImageCodec.AVIF -> setOf("avif")
+                OutputImageCodec.JPEG -> setOf("jpg", "jpeg")
+            }
+        }
+        if (current in accepted) return null
+        val base = displayName.substringBeforeLast('.', displayName)
+        return base + "." + extensionFor(kind, imageCodec)
     }
 
     private fun isMediaStore(uri: Uri): Boolean =

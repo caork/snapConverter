@@ -153,25 +153,69 @@ Rules:
   independent size heuristic.
 - **RAW and animated stills are never flagged** (`UNJUDGED_STILL_SUBTYPES`).
   A DNG is large on purpose and re-encoding it would discard sensor data.
-- Thresholds and floors live in `MediaAudit` with `AuditSensitivity`; the UI
-  only picks a sensitivity, it never re-derives a verdict.
+- Thresholds and floors live in `MediaAudit`; the UI never re-derives a verdict.
+  `AuditSensitivity` is only a preset — it expands into an `AuditTuning`, which
+  is the single struct the audit reads. The advanced sheet edits individual
+  fields of that struct, so a preset and a hand-tuned run go through exactly the
+  same code path, and a tuning change re-runs the scan (debounced ~260 ms)
+  rather than filtering the old result.
 - **Folder and date filters are a view over the findings, not a query.** The
   whole report stays in memory, so switching folders is instant and the folder
   list can state what each one is worth. A filter that hides a file also drops
   it from the selection — the Convert button must never count a file the user
   cannot see. The date filter measures from `ScanReport.scannedAtSec`, not
   from "now", so the list cannot shift while the user is choosing.
+  `TimeFilter.CUSTOM` carries a `DateRange` of calendar days (inclusive at both
+  ends); its stepper moves one edge by a year / month / day and always lands on
+  a real date (the 31st plus a month is the 30th, not the 1st).
 - Permissions: `READ_MEDIA_IMAGES` / `READ_MEDIA_VIDEO` on 33+,
   `READ_EXTERNAL_STORAGE` up to 32. A partial grant on 14+ is accepted as-is —
   the scan then reports on exactly the files the user shared.
 
 Batch conversion writes through `MediaOutputWriter` — the same pending →
 encode → commit path the single-file screen uses — runs one file at a time
-(the encoder is a single shared block), never overwrites or deletes an
-original, and asks before starting a run of more than 20 files.
-`BatchSettings.resolution = ORIGINAL` sets `CompressionRequest.keepOriginalPixels`,
-which is the one way to bypass the quality tier's long-edge cap: a batch that
-says "尺寸 原始" must not quietly hand back 1080p.
+(the encoder is a single shared block), and asks before starting a run of more
+than 20 files. `resolution = ORIGINAL` sets
+`CompressionRequest.keepOriginalPixels`, which is the one way to bypass the
+quality tier's long-edge cap: a batch that says "尺寸 原始" must not quietly
+hand back 1080p.
+
+`BatchSettings` splits into `BatchVideoSettings` and `BatchImageSettings`: one
+library run touches both kinds, and a 4K clip's parameters say nothing about a
+screenshot. Video carries the single-file screen's whole set except trim (a
+batch has no timeline to point at); stills carry codec, quality, and a long-edge
+cap — the batch-shaped equivalent of an exact output W×H, since a batch spans
+both orientations. `estimatedSaving` re-runs `MediaAudit.estimateOutputBytes`
+with these settings, so the number on the Convert button is the number the run
+will produce, not the audit's default.
+
+### Replacing originals (required shape)
+
+The destination may be "replace the original", and then:
+
+- The encode still writes a **new** file in the app folder first. Nothing
+  overwrites an original until the user has previewed that output and pressed
+  替换 — a batch cannot judge its own quality.
+- `OriginalReplacer` **renames before it writes**. MediaStore moves the file
+  itself while the row still describes what is on disk; renaming after the
+  overwrite leaves the media scanner to index a file no row points at and the
+  original row holding zero bytes (verified on a PJD110). The new name follows
+  the new format — HEIC bytes must not keep a `.JPG` name.
+- The written size comes from the staged output, not from a re-query of the
+  original: MediaStore's `SIZE` stays stale for a while after an overwrite.
+- 全部替换 asks for one `MediaStore.createWriteRequest` covering every pending
+  original. Fifty consent dialogs in a row would be worse than the batch.
+
+### Load readout during a run
+
+`SystemLoadMonitor` samples app CPU from `Process.getElapsedCpuTime()` (public,
+sandbox-safe). `/proc/stat` and KGSL's `gpu_busy_percentage` / `devfreq/gpu_load`
+are **not** readable by a third-party app on a PJD110; `kgsl-3d0/gpubusy` is, and
+its `busy total` pair is already an interval ratio (the counter resets on read),
+where `total == 0` means an idle interval, not an unreadable counter. A number
+the device will not give up is reported as unknown and named in the UI — never
+as a zero that reads like an idle GPU. fps / MB·s⁻¹ / ETA come from the engine's
+own progress callback.
 
 ### Encoder selection (required)
 
@@ -233,7 +277,9 @@ videoBitrate ≈ (targetFileSizeBits - estimatedAudioBits - containerOverhead) /
 - Audio-only extraction: AudioExtractor (Extractor → Muxer → M4A), pure passthrough, no codec involved, not gated on Qualcomm encoder availability
 - Mute: muteAudio on CompressionRequest drops the audio track
 - Library scan: `MediaAudit` (engine policy) + `MediaLibraryScanner` (app), MediaStore columns only
-- Batch conversion of the scan's selection, one shared `BatchSettings`, sequential through `MediaOutputWriter`
+- Batch conversion of the scan's selection, per-media-type `BatchSettings`, sequential through `MediaOutputWriter`
+- Replace-the-original as a batch destination: preview first, then overwrite, one consent request for the queue
+- Live CPU / GPU / fps readout while a batch runs, with unreadable counters named rather than zeroed
 - Device capability screen from live `MediaCodecList`
 - HDR in → HDR out (HEVC/AV1 Main10, HLG / HDR10 metadata, 10-bit BT.2020 EGL). No silent SDR fallback.
 - OpenGL ES 3.x frame processor
