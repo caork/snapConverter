@@ -1,197 +1,111 @@
 package com.snapconverter.app.ui.screens
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Bolt
-import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
-import com.snapconverter.app.ui.components.ChipRow
-import com.snapconverter.app.ui.components.HWTag
-import com.snapconverter.app.ui.components.ScCard
-import com.snapconverter.app.ui.components.SectionLabel
-import com.snapconverter.app.ui.theme.SnapDimensions
+import com.snapconverter.app.ui.components.Badge
+import com.snapconverter.app.ui.components.BadgeTone
+import com.snapconverter.app.ui.components.DetailRow
+import com.snapconverter.app.ui.components.GroupedList
+import com.snapconverter.app.ui.components.InsetGroup
+import com.snapconverter.app.ui.components.Ios27Sheet
+import com.snapconverter.app.ui.components.ListRow
+import com.snapconverter.app.ui.components.RowLabel
+import com.snapconverter.app.ui.theme.ios27.Ios27Spacing
+import com.snapconverter.app.ui.theme.ios27.Ios27Type
+import com.snapconverter.app.ui.theme.ios27.LocalIos27Palette
 import com.snapconverter.engine.device.DeviceCapabilityReport
 
 /**
- * Live device capability screen (V1 scope): renders the MediaCodecList probe
- * behind a full-screen dialog. Capability-driven, never SoC-name driven.
+ * The live MediaCodecList probe. Capability-driven: every line here comes from
+ * runtime enumeration, never from a SoC marketing name.
  */
 @Composable
 fun CapabilityScreen(
     report: DeviceCapabilityReport?,
     onDismiss: () -> Unit,
 ) {
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-        Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = MaterialTheme.colorScheme.background,
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(SnapDimensions.SpacingLg),
-                verticalArrangement = Arrangement.spacedBy(SnapDimensions.SpacingMd),
+    val palette = LocalIos27Palette.current
+    Ios27Sheet(title = "设备能力", onDismiss = onDismiss) {
+        if (report == null) {
+            GroupedList {
+                InsetGroup {
+                    row {
+                        ListRow {
+                            Text(
+                                text = "正在枚举 MediaCodecList…",
+                                style = Ios27Type.body,
+                                color = palette.labelSecondary,
+                            )
+                        }
+                    }
+                }
+            }
+            return@Ios27Sheet
+        }
+
+        GroupedList {
+            InsetGroup(header = "设备", footer = deviceFooter(report)) {
+                row { DetailRow(title = "机型", value = report.manufacturer + " " + report.device) }
+                row { DetailRow(title = "SoC", value = report.socModel) }
+                row { DetailRow(title = "hardware", value = report.hardware) }
+                row { DetailRow(title = "Android API", value = report.sdkInt.toString()) }
+                row {
+                    ListRow {
+                        RowLabel(title = "V1 硬件管线")
+                        Spacer(Modifier.width(Ios27Spacing.sm))
+                        Badge(
+                            text = if (report.v1Supported) "可用" else "不支持",
+                            tone = if (report.v1Supported) BadgeTone.Good else BadgeTone.Warn,
+                        )
+                    }
+                }
+            }
+
+            InsetGroup(
+                header = "运行时枚举的能力",
+                footer = "JPEG 必须有公开的硬件编码器才启用，否则宁可拒绝也不做 CPU 软压缩。",
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "设备能力",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(onClick = onDismiss) {
-                        Icon(Icons.Rounded.Close, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("关闭")
+                capabilityRows(report).forEach { (label, ok) ->
+                    row {
+                        ListRow {
+                            RowLabel(title = label)
+                            Spacer(Modifier.width(Ios27Spacing.sm))
+                            Badge(
+                                text = if (ok) "支持" else "无",
+                                tone = if (ok) BadgeTone.Good else BadgeTone.Neutral,
+                            )
+                        }
                     }
                 }
+            }
 
-                if (report == null) {
-                    Text(
-                        "正在枚举 MediaCodecList…",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 13.sp,
-                    )
-                    return@Column
+            InsetGroup(header = "硬件编码器（" + report.encoders.size + "）") {
+                report.encoders.forEach { codec ->
+                    row {
+                        ListRow {
+                            RowLabel(title = codec.name, subtitle = codec.mime)
+                            if (codec.isQualcomm) {
+                                Spacer(Modifier.width(Ios27Spacing.sm))
+                                Badge(text = "Qualcomm", tone = BadgeTone.Tint)
+                            }
+                        }
+                    }
                 }
+            }
 
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(SnapDimensions.SpacingMd),
-                ) {
-                    ScCard {
-                        Column(
-                            modifier = Modifier.padding(SnapDimensions.SpacingMd),
-                            verticalArrangement = Arrangement.spacedBy(SnapDimensions.SpacingSm),
-                        ) {
-                            SectionLabel("设备")
-                            Text(
-                                report.manufacturer + " " + report.device,
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Medium,
-                            )
-                            Text(
-                                "SoC: " + report.socModel +
-                                    " · hardware: " + report.hardware +
-                                    " · Android API " + report.sdkInt,
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    Icons.Rounded.Bolt,
-                                    contentDescription = null,
-                                    tint = if (report.v1Supported) {
-                                        MaterialTheme.colorScheme.tertiary
-                                    } else {
-                                        MaterialTheme.colorScheme.error
-                                    },
-                                    modifier = Modifier.size(16.dp),
-                                )
-                                Spacer(Modifier.width(6.dp))
+            if (report.notes.isNotEmpty()) {
+                InsetGroup(header = "说明") {
+                    report.notes.forEach { note ->
+                        row {
+                            ListRow {
                                 Text(
-                                    if (report.v1Supported) "V1 硬件管线可用" else "V1 不支持此设备",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = if (report.v1Supported) {
-                                        MaterialTheme.colorScheme.tertiary
-                                    } else {
-                                        MaterialTheme.colorScheme.error
-                                    },
+                                    text = note,
+                                    style = Ios27Type.footnote,
+                                    color = palette.labelSecondary,
                                 )
-                            }
-                        }
-                    }
-
-                    ScCard {
-                        Column(
-                            modifier = Modifier.padding(SnapDimensions.SpacingMd),
-                            verticalArrangement = Arrangement.spacedBy(SnapDimensions.SpacingSm),
-                        ) {
-                            SectionLabel("硬件编码能力（运行时枚举）")
-                            ChipRow {
-                                CapChip("HEVC 编码", report.hardwareHevcEncoder)
-                                CapChip("H.264 编码", report.hardwareAvcEncoder)
-                                if (report.hardwareAv1Encoder) CapChip("AV1 编码", true)
-                                CapChip("JPEG 编码", report.hardwareJpegEncoder)
-                                CapChip("HEIC 管线", report.hardwareHeicPath)
-                                CapChip("高通解码器", report.hasQualcommDecoder)
-                                CapChip("厂商扩展 API", report.vendorExtensionsApi)
-                                if (report.vmafAvailable) CapChip("VMAF", true)
-                            }
-                        }
-                    }
-
-                    ScCard {
-                        Column(
-                            modifier = Modifier.padding(SnapDimensions.SpacingMd),
-                            verticalArrangement = Arrangement.spacedBy(SnapDimensions.SpacingSm),
-                        ) {
-                            SectionLabel("硬件编码器（" + report.encoders.size + "）")
-                            report.encoders.forEach { codec ->
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            codec.name,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Medium,
-                                        )
-                                        Text(
-                                            codec.mime,
-                                            fontSize = 11.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                    if (codec.isQualcomm) HWTag("Qualcomm")
-                                }
-                            }
-                        }
-                    }
-
-                    if (report.notes.isNotEmpty()) {
-                        ScCard {
-                            Column(
-                                modifier = Modifier.padding(SnapDimensions.SpacingMd),
-                                verticalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
-                                SectionLabel("说明")
-                                report.notes.forEach { note ->
-                                    Text(
-                                        "· " + note,
-                                        fontSize = 12.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
                             }
                         }
                     }
@@ -201,19 +115,19 @@ fun CapabilityScreen(
     }
 }
 
-@Composable
-private fun CapChip(label: String, ok: Boolean) {
-    Text(
-        text = if (ok) "✓ " + label else "✕ " + label,
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Medium,
-        color = if (ok) {
-            MaterialTheme.colorScheme.onSurface
-        } else {
-            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
-        },
-        modifier = Modifier
-            .padding(2.dp)
-            .fillMaxWidth(),
-    )
+private fun deviceFooter(report: DeviceCapabilityReport): String = when {
+    !report.v1Supported -> "V1 需要高通硬件编码器；本机未枚举到，因此不提供编码。"
+    report.hardwareHevcEncoder -> "已枚举到高通硬件 HEVC 编码器。"
+    else -> "已枚举到高通硬件 H.264 编码器（未枚举到 HEVC）。"
+}
+
+private fun capabilityRows(report: DeviceCapabilityReport): List<Pair<String, Boolean>> = buildList {
+    add("HEVC 硬件编码" to report.hardwareHevcEncoder)
+    add("H.264 硬件编码" to report.hardwareAvcEncoder)
+    add("AV1 硬件编码" to report.hardwareAv1Encoder)
+    add("JPEG 硬件编码" to report.hardwareJpegEncoder)
+    add("HEIC 写入管线" to report.hardwareHeicPath)
+    add("高通硬件解码器" to report.hasQualcommDecoder)
+    add("厂商扩展 API" to report.vendorExtensionsApi)
+    add("VMAF 评分" to report.vmafAvailable)
 }

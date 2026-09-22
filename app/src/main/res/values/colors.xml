@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Splash-time window colour. Matches the grouped background Compose draws,
+         so there is no flash of a different colour before the first frame. -->
+    <color name="window_background">#F2F2F7</color>
+</resources>

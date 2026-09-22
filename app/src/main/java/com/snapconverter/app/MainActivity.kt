@@ -27,7 +27,6 @@ class MainActivity : ComponentActivity() {
             var settings by remember { mutableStateOf(AppSettings.load(this@MainActivity)) }
             SnapConverterTheme(
                 themeMode = settings.themeMode,
-                dynamicColor = settings.dynamicColor,
                 oledBlack = settings.oledBlack,
                 glassPreset = settings.glassPreset,
             ) {

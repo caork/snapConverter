@@ -74,6 +74,8 @@ fun AspectMediaThumb(
     kind: MediaKind?,
     displayWidth: Int,
     displayHeight: Int,
+    maxWidth: Int = MAX_THUMB_W,
+    maxHeight: Int = MAX_THUMB_H,
     onClick: () -> Unit,
 ) {
     val w = displayWidth.coerceAtLeast(1)
@@ -82,11 +84,11 @@ fun AspectMediaThumb(
     val landscape = aspect >= 1f
     val thumbModifier = if (landscape) {
         Modifier
-            .width(MAX_THUMB_W.dp)
+            .width(maxWidth.dp)
             .aspectRatio(aspect)
     } else {
         Modifier
-            .height(MAX_THUMB_H.dp)
+            .height(maxHeight.dp)
             .aspectRatio(aspect, matchHeightConstraintsFirst = true)
     }
     val context = LocalContext.current

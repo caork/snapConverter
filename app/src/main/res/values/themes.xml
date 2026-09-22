@@ -3,7 +3,6 @@
     <style name="Theme.SnapConverter" parent="android:Theme.Material.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
-        <item name="android:windowBackground">@color/ic_launcher_bg</item>
+        <item name="android:windowBackground">@color/window_background</item>
     </style>
-    <color name="ic_launcher_bg">#071018</color>
 </resources>

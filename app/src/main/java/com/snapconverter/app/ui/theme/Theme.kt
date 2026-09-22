@@ -1,99 +1,99 @@
 package com.snapconverter.app.ui.theme
 
 import android.app.Activity
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import com.snapconverter.app.ui.theme.ios27.GlassPreset
-import com.snapconverter.app.ui.theme.ios27.Ios27Colors
+import com.snapconverter.app.ui.theme.ios27.Ios27Palette
 import com.snapconverter.app.ui.theme.ios27.Ios27Type
 import com.snapconverter.app.ui.theme.ios27.LocalGlassPreset
+import com.snapconverter.app.ui.theme.ios27.LocalIos27Palette
 import com.snapconverter.app.ui.theme.ios27.LocalIsDark
+import com.snapconverter.app.ui.theme.ios27.ios27Palette
 
-/** Theme mode preference, System / Light / Dark tri-state. */
+/** Theme mode preference: System / Light / Dark. */
 enum class SnapThemeMode { SYSTEM, LIGHT, DARK }
 
-/**
- * iOS 27 typographic scale (SF styles) mapped onto the Material 3 slots used
- * by existing components. display/headline carry the large titles; label
- * styles carry footnote/caption emphasis.
- */
+/** SF type scale mapped onto the Material slots the few M3 widgets still use. */
 private val Type = Typography(
     headlineLarge = Ios27Type.largeTitle,
     headlineMedium = Ios27Type.title1,
     headlineSmall = Ios27Type.title2,
     titleLarge = Ios27Type.title3,
     titleMedium = Ios27Type.headline,
-    titleSmall = Ios27Type.subheadline.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold),
+    titleSmall = Ios27Type.subheadlineEmphasized,
     bodyLarge = Ios27Type.body,
     bodyMedium = Ios27Type.callout,
-    bodySmall = Ios27Type.subheadline,
+    bodySmall = Ios27Type.footnote,
     labelLarge = Ios27Type.headline,
-    labelMedium = Ios27Type.footnote.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold),
-    labelSmall = Ios27Type.caption1.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold),
+    labelMedium = Ios27Type.footnoteEmphasized,
+    labelSmall = Ios27Type.caption1Emphasized,
 )
 
 /**
- * iOS 27 semantic palette: grouped backgrounds, label ramp, separator outline,
- * systemMint tint (which doubles as the SnapConverter brand). OLED keeps the
- * pure-black base; dark elevated surfaces match #1c1c1e/#2c2c2e.
+ * Maps the iOS palette onto the Material scheme so the remaining framework
+ * widgets (alerts, sheets, text fields) inherit the same colors.
  */
-private fun ios27LightScheme() = lightColorScheme(
-    primary = Ios27Colors.mintLight,
-    onPrimary = Ios27Colors.inkOnMint,
-    primaryContainer = Ios27Colors.mintLight,
-    onPrimaryContainer = Ios27Colors.inkOnMint,
-    secondary = Ios27Colors.mintLight,
-    background = Ios27Colors.groupedLight,
-    surface = androidx.compose.ui.graphics.Color.White,
-    onBackground = Ios27Colors.labelPrimaryLight,
-    onSurface = Ios27Colors.labelPrimaryLight,
-    onSurfaceVariant = Ios27Colors.labelSecondaryLight,
-    error = androidx.compose.ui.graphics.Color(0xFFFF3B30),
-    outline = Ios27Colors.separatorLight,
-    outlineVariant = Ios27Colors.separatorLight,
-    tertiary = Ios27Colors.goldLight,
-    onTertiary = androidx.compose.ui.graphics.Color.White,
-)
-
-private fun ios27DarkScheme(oled: Boolean) = darkColorScheme(
-    primary = Ios27Colors.mintDark,
-    onPrimary = Ios27Colors.inkOnMint,
-    primaryContainer = Ios27Colors.mintDark,
-    onPrimaryContainer = Ios27Colors.inkOnMint,
-    secondary = Ios27Colors.mintDark,
-    background = if (oled) Ios27Colors.groupedDarkBase else androidx.compose.ui.graphics.Color(0xFF050506),
-    surface = if (oled) Ios27Colors.groupedDarkBase else Ios27Colors.groupedDarkElevated,
-    onBackground = Ios27Colors.labelPrimaryDark,
-    onSurface = Ios27Colors.labelPrimaryDark,
-    onSurfaceVariant = Ios27Colors.labelSecondaryDark,
-    error = androidx.compose.ui.graphics.Color(0xFFFF453A),
-    outline = Ios27Colors.separatorDark,
-    outlineVariant = Ios27Colors.separatorDark,
-    tertiary = Ios27Colors.goldDark,
-    onTertiary = Ios27Colors.inkOnMint,
-)
+private fun materialScheme(p: Ios27Palette) = if (p.dark) {
+    darkColorScheme(
+        primary = p.tintText,
+        onPrimary = p.onTintFill,
+        secondary = p.tintText,
+        background = p.groupedBackground,
+        onBackground = p.label,
+        surface = p.groupedContent,
+        onSurface = p.label,
+        surfaceVariant = p.groupedContentInner,
+        onSurfaceVariant = p.labelSecondary,
+        surfaceContainerHigh = p.groupedContent,
+        error = p.red,
+        onError = Color.White,
+        errorContainer = p.red.copy(alpha = 0.18f),
+        onErrorContainer = p.redText,
+        outline = p.separatorOpaque,
+        outlineVariant = p.separator,
+        tertiary = p.yellowText,
+    )
+} else {
+    lightColorScheme(
+        primary = p.tintText,
+        onPrimary = p.onTintFill,
+        secondary = p.tintText,
+        background = p.groupedBackground,
+        onBackground = p.label,
+        surface = p.groupedContent,
+        onSurface = p.label,
+        surfaceVariant = p.groupedContentInner,
+        onSurfaceVariant = p.labelSecondary,
+        surfaceContainerHigh = p.groupedContent,
+        error = p.red,
+        onError = Color.White,
+        errorContainer = p.red.copy(alpha = 0.12f),
+        onErrorContainer = p.redText,
+        outline = p.separatorOpaque,
+        outlineVariant = p.separator,
+        tertiary = p.yellowText,
+    )
+}
 
 /**
- * App theme on the iOS 27 design language: grouped-background palette,
- * SF-scale typography, and the Liquid Glass transparency slider exposed to
- * every glass surface via [LocalGlassPreset].
+ * App theme on the iOS 27 design language: grouped-background palette, the SF
+ * type scale, and the system transparency slider exposed to the chrome through
+ * [LocalGlassPreset].
  */
 @Composable
 fun SnapConverterTheme(
     themeMode: SnapThemeMode = SnapThemeMode.SYSTEM,
-    dynamicColor: Boolean = false,
     oledBlack: Boolean = false,
     glassPreset: GlassPreset = GlassPreset.Default,
     content: @Composable () -> Unit,
@@ -104,22 +104,25 @@ fun SnapConverterTheme(
         SnapThemeMode.LIGHT -> false
         SnapThemeMode.DARK -> true
     }
-    val base = if (dark) ios27DarkScheme(oledBlack) else ios27LightScheme()
-    val scheme = if (dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        val view = LocalView.current
-        if (dark) dynamicDarkColorScheme(view.context) else dynamicLightColorScheme(view.context)
-    } else {
-        base
+    // The grouped dark background is already pure black; the preference only
+    // lifts the non-OLED case off it.
+    val palette = ios27Palette(dark).let { base ->
+        if (dark && !oledBlack) {
+            base.copy(groupedBackground = Color(0xFF0B0B0C))
+        } else {
+            base
+        }
     }
+    val scheme = materialScheme(palette)
 
-    // Keep status / navigation bar icon contrast in sync with the theme.
+    // Edge-to-edge: the bars stay transparent, icon contrast follows the theme.
     val view = LocalView.current
     if (!view.isInEditMode) {
         DisposableEffect(view, dark) {
             val window = (view.context as? Activity)?.window
             if (window != null) {
-                window.statusBarColor = scheme.background.toArgb()
-                window.navigationBarColor = scheme.background.toArgb()
+                window.statusBarColor = Color.Transparent.toArgb()
+                window.navigationBarColor = Color.Transparent.toArgb()
                 val controller = WindowCompat.getInsetsController(window, view)
                 controller.isAppearanceLightStatusBars = !dark
                 controller.isAppearanceLightNavigationBars = !dark
@@ -129,6 +132,7 @@ fun SnapConverterTheme(
     }
 
     CompositionLocalProvider(
+        LocalIos27Palette provides palette,
         LocalGlassPreset provides glassPreset,
         LocalIsDark provides dark,
     ) {

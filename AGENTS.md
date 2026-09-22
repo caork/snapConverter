@@ -45,7 +45,7 @@ These are product rules, not style preferences. A change that violates them is i
 | Layer | Choice |
 | --- | --- |
 | Language | Kotlin |
-| UI | Jetpack Compose + Material 3 |
+| UI | Jetpack Compose on an iOS 27 token layer (see “UI design system”); Material 3 only for sheets / alerts / switch |
 | minSdk | 29 (Android 10) — `isHardwareAccelerated` / `isVendor` / `isSoftwareOnly` |
 | Vendor extensions | API 31+ via `MediaCodec.getSupportedVendorParameters()` |
 | compileSdk / targetSdk | Latest stable installed in CI (currently 36) |
@@ -205,6 +205,57 @@ echo "sdk.dir=$ANDROID_HOME" > local.properties
 ```
 
 `local.properties` is gitignored. Do not commit machine SDK paths.
+
+## UI design system
+
+The app follows the iOS 27 design language (tokens from
+[seunghan91/ios27-design-system](https://github.com/seunghan91/ios27-design-system),
+measured off Apple's iOS/iPadOS 27 Figma kit 27.0.2). These are structural
+rules, not taste:
+
+1. **Colors come from `LocalIos27Palette`.** No raw hex outside
+   `ui/theme/ios27/Ios27Tokens.kt`. Light and dark are one palette type, so a
+   new surface cannot exist in only one appearance. The accent is the launcher
+   icon's blue (light) / cyan (dark) — the one token deliberately replaced,
+   because the accent is the brand.
+2. **Liquid Glass belongs to the navigation layer only** — the top bar and the
+   bottom action bar, via `Modifier.ios27BarChrome`. Cards, rows, chips, and
+   tiles are opaque. Never nest translucency: material over material compounds
+   into fog (`glass-legibility.md` in the reference repo).
+3. **No invented backdrop.** The app does not paint a decorative gradient or
+   colour blobs behind its own content; the background is
+   `groupedBackground`.
+4. **The main screen is a workbench, not a Settings pane** (`Ios27Cards.kt`:
+   `CardStack`, `ContentCard`, `IconTile`, `Chip`, `ParamPill`). Each card owns
+   one decision — source, output format, compression, parameters — and carries a
+   glyph tile so the screen is scannable. Encoder-level parameters live behind
+   sheets, and *inside* a sheet the idiom is the inset grouped list
+   (`InsetGroup` + `ListRow`, 52pt rows, 16pt separator inset), because a sheet
+   really is settings.
+5. **Selection must be a solid fill.** A selected chip is `tintFill` with
+   `onTintFill` text; segmented thumbs are `#fff` (light) / white @27% (dark).
+   A tint-on-tint “selected” state is invisible and counts as a bug.
+6. **More than four options → picker sheet**, not a wall of chips. Chips are
+   for the one choice that defines the job (output format); everything else is
+   a named value that opens a sheet.
+7. **One prominent button per screen**, 50pt pill in the bottom bar. Other
+   actions are `ActionTile`s or tinted rows; destructive ones are red.
+8. Type comes from `Ios27Type`, metrics from `Ios27Metrics`/`Ios27Spacing`, and
+   motion from `Ios27Motion` (springs, never linear easing). Minimum touch
+   target 44pt.
+9. Capability-driven controls stay **visible but disabled** when the device
+   lacks the hardware, so the UI still tells the truth about the device.
+
+Android has no backdrop blur for sibling content, so the bar chrome uses the
+kit's blur-free hard scroll-edge fill. The system transparency slider
+(`GlassPreset`) scales that fill; it does not make content translucent.
+
+The launcher icon is a vector adaptive icon (`drawable/ic_launcher_bg.xml`,
+`ic_launcher_fg.xml`, `ic_launcher_mono.xml`) whose geometry is traced from the
+source artwork and sized so the mark's furthest ink sits 35.7dp from the centre
+of the 108dp viewport — inside the 36dp safe circle, so a circular mask cannot
+clip a corner. `AppMark` in the header draws the same foreground vector, so the
+header and the home screen can never drift apart.
 
 ## Code rules
 

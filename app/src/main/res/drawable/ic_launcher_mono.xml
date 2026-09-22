@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?><!--
+  Themed-icon (monochrome) layer. Same two tiles, but the seam is widened so the
+  pieces still read as two when the system paints everything one colour. The
+  system supplies the tint; only the alpha of this layer matters.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M33.62,28.42H45.76A7.68,7.68 0 0 1 53.44,36.1V45.95A8.27,8.27 0 1 1 53.44,62.26V71.9A7.68,7.68 0 0 1 45.76,79.58H33.62A10.12,10.12 0 0 1 23.5,69.46V38.54A10.12,10.12 0 0 1 33.62,28.42Z" />
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M62.38,28.42H74.52A9.98,9.98 0 0 1 84.5,38.4V69.6A9.98,9.98 0 0 1 74.52,79.58H62.38A7.82,7.82 0 0 1 54.56,71.76V63.49A9.39,9.39 0 1 0 54.56,44.72V36.24A7.82,7.82 0 0 1 62.38,28.42Z" />
+</vector>
